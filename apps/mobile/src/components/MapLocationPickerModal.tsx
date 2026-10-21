@@ -10,7 +10,7 @@ import {
   Alert,
   ScrollView,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import MapView, { Marker, UrlTile } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { colors, fonts } from '../theme';
@@ -160,6 +160,7 @@ export default function MapLocationPickerModal({
           <MapView
             ref={mapRef}
             style={styles.map}
+            mapType={Platform.OS === 'android' ? 'none' : 'standard'}
             initialRegion={{
               latitude: selectedCoord.lat,
               longitude: selectedCoord.lng,
@@ -169,6 +170,12 @@ export default function MapLocationPickerModal({
             onPress={handleMapPress}
             showsUserLocation
           >
+            <UrlTile
+              urlTemplate="https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
+              maximumZ={19}
+              flipY={false}
+              zIndex={-1}
+            />
             <Marker
               coordinate={{ latitude: selectedCoord.lat, longitude: selectedCoord.lng }}
               draggable

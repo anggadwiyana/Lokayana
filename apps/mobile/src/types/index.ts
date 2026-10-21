@@ -70,6 +70,8 @@ export interface RouteInfo {
 export interface RecommendationResponse {
   origin: Coordinate & { name: string };
   destination: Coordinate & { name: string; destinationObj?: Destination | null };
+  orderedDestinations?: Destination[];
+  stops?: Destination[];
   straightDistanceKm: number;
   isDualRadius: boolean;
   searchAreas: SearchArea[];

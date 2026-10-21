@@ -2,21 +2,36 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
-import type { RouteInfo, Coordinate } from '../types';
+import type { RouteInfo, Coordinate, Destination } from '../types';
 
 interface Props {
   route: RouteInfo;
   origin: Coordinate & { name: string };
   destination: Coordinate & { name: string };
+  stops?: Destination[];
 }
 
-export default function FastestRouteCard({ route, origin, destination }: Props) {
+export default function FastestRouteCard({ route, origin, destination, stops }: Props) {
+  const hasMultipleStops = stops && stops.length > 1;
+
   const handleOpenGoogleMaps = () => {
-    const url = Platform.select({
-      ios: `maps://app?saddr=${origin.lat},${origin.lng}&daddr=${destination.lat},${destination.lng}`,
-      android: `google.navigation:q=${destination.lat},${destination.lng}`,
-      default: `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}`,
-    });
+    let url = '';
+
+    if (hasMultipleStops && stops) {
+      const lastStop = stops[stops.length - 1];
+      const waypoints = stops
+        .slice(0, stops.length - 1)
+        .map((s) => `${s.lat},${s.lng}`)
+        .join('|');
+
+      url = `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${lastStop.lat},${lastStop.lng}&waypoints=${encodeURIComponent(waypoints)}`;
+    } else {
+      url = Platform.select({
+        ios: `maps://app?saddr=${origin.lat},${origin.lng}&daddr=${destination.lat},${destination.lng}`,
+        android: `google.navigation:q=${destination.lat},${destination.lng}`,
+        default: `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}`,
+      }) || `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}`;
+    }
 
     Linking.canOpenURL(url)
       .then((supported) => {
@@ -43,10 +58,32 @@ export default function FastestRouteCard({ route, origin, destination }: Props) 
       <View style={styles.header}>
         <View style={styles.badge}>
           <Ionicons name="flash" size={13} color={colors.ink} />
-          <Text style={styles.badgeText}>RUTE TERCEPAT DITEMUKAN</Text>
+          <Text style={styles.badgeText}>
+            {hasMultipleStops ? `RUTE ${stops.length} DESTINASI` : 'RUTE TERCEPAT DITEMUKAN'}
+          </Text>
         </View>
         <Text style={styles.distanceValue}>{route.roadDistanceKm} km</Text>
       </View>
+
+      {/* Multi-stop Timeline (jika multi-tujuan) */}
+      {hasMultipleStops && stops && (
+        <View style={styles.itineraryBox}>
+          <View style={styles.itineraryItem}>
+            <View style={[styles.itineraryDot, { backgroundColor: '#2563EB' }]} />
+            <Text style={styles.itineraryText} numberOfLines={1}>
+              <Text style={styles.itineraryBold}>Awal:</Text> {origin.name}
+            </Text>
+          </View>
+          {stops.map((stop, idx) => (
+            <View key={stop.id} style={styles.itineraryItem}>
+              <View style={[styles.itineraryDot, { backgroundColor: colors.sea }]} />
+              <Text style={styles.itineraryText} numberOfLines={1}>
+                <Text style={styles.itineraryBold}>Stop {idx + 1}:</Text> {stop.name}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       {/* Modes comparison */}
       <View style={styles.modesRow}>
@@ -95,7 +132,9 @@ export default function FastestRouteCard({ route, origin, destination }: Props) 
         activeOpacity={0.85}
       >
         <Ionicons name="navigate" size={16} color="#FFFFFF" />
-        <Text style={styles.navButtonText}>Mulai Navigasi di Google Maps</Text>
+        <Text style={styles.navButtonText}>
+          {hasMultipleStops ? 'Buka Seluruh Rute di Google Maps' : 'Mulai Navigasi di Google Maps'}
+        </Text>
         <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
       </TouchableOpacity>
     </View>
@@ -143,6 +182,35 @@ const styles = StyleSheet.create({
     fontFamily: fonts.extraBold,
     fontSize: 18,
     color: colors.ink,
+  },
+  itineraryBox: {
+    backgroundColor: colors.mist,
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 6,
+  },
+  itineraryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  itineraryDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  itineraryText: {
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    color: colors.ink,
+  },
+  itineraryBold: {
+    fontFamily: fonts.bold,
+    color: colors.sea,
   },
   modesRow: {
     flexDirection: 'row',

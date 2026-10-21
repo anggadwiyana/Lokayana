@@ -18,20 +18,52 @@ export function calculateHaversineDistance(c1: Coordinate, c2: Coordinate): numb
 }
 
 /**
- * Menghasilkan titik kurva halus jika OSRM sedang offline.
+ * Nearest-Neighbour (Greedy TSP):
+ * Mengurutkan destinasi agar rute perjalanan efisien dari titik awal (Origin -> Dest 1 -> Dest 2 -> ...).
+ */
+export function calculateGreedyOrder<T extends Coordinate>(
+  origin: Coordinate,
+  destinations: T[]
+): T[] {
+  if (destinations.length <= 1) return [...destinations];
+
+  const unvisited = [...destinations];
+  const ordered: T[] = [];
+  let current: Coordinate = origin;
+
+  while (unvisited.length > 0) {
+    let nearestIdx = 0;
+    let minDist = calculateHaversineDistance(current, unvisited[0]);
+
+    for (let i = 1; i < unvisited.length; i++) {
+      const d = calculateHaversineDistance(current, unvisited[i]);
+      if (d < minDist) {
+        minDist = d;
+        nearestIdx = i;
+      }
+    }
+
+    const nextPlace = unvisited.splice(nearestIdx, 1)[0];
+    ordered.push(nextPlace);
+    current = nextPlace;
+  }
+
+  return ordered;
+}
+
+/**
+ * Menghasilkan kurva realistis antar dua titik jika API OSRM offline.
  */
 function generateFallbackCurve(origin: Coordinate, dest: Coordinate): Coordinate[] {
   const points: Coordinate[] = [origin];
   const steps = 16;
   const midLat = (origin.lat + dest.lat) / 2;
   const midLng = (origin.lng + dest.lng) / 2;
-  // Sedikit offset agar polyline tampak seperti jalan alami berbelok
   const offsetLat = (dest.lng - origin.lng) * 0.08;
   const offsetLng = (origin.lat - dest.lat) * 0.08;
 
   for (let i = 1; i < steps; i++) {
     const t = i / steps;
-    // Quadratic Bezier interpolation
     const lat = (1 - t) * (1 - t) * origin.lat + 2 * (1 - t) * t * (midLat + offsetLat) + t * t * dest.lat;
     const lng = (1 - t) * (1 - t) * origin.lng + 2 * (1 - t) * t * (midLng + offsetLng) + t * t * dest.lng;
     points.push({ lat, lng });
@@ -42,84 +74,125 @@ function generateFallbackCurve(origin: Coordinate, dest: Coordinate): Coordinate
 }
 
 /**
- * Mencari rute tercepat menggunakan OSRM API (gratis, tanpa API key).
- * Jika gagal atau offline, menggunakan perhitungan fallback cerdas.
+ * Menghitung rute multi-titik (Origin -> Dest1 -> Dest2 -> ...).
+ * Mendukung beberapa OSRM mirror dengan failover otomatis.
+ */
+export async function calculateMultiStopRoute(points: Coordinate[]): Promise<RouteInfo> {
+  if (points.length < 2) {
+    return {
+      straightDistanceKm: 0,
+      roadDistanceKm: 0,
+      carDurationMinutes: 0,
+      motorDurationMinutes: 0,
+      fastestMode: 'MOTOR',
+      polylineCoords: points,
+      summaryNote: 'Rute titik tunggal',
+    };
+  }
+
+  // Hitung total straight line distance
+  let totalStraight = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    totalStraight += calculateHaversineDistance(points[i], points[i + 1]);
+  }
+
+  const coordsString = points
+    .map((p) => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`)
+    .join(';');
+
+  const candidateEndpoints = [
+    `https://routing.openstreetmap.de/routed-car/route/v1/driving/${coordsString}?overview=full&geometries=geojson`,
+    `https://router.project-osrm.org/route/v1/driving/${coordsString}?overview=full&geometries=geojson`,
+    `http://router.project-osrm.org/route/v1/driving/${coordsString}?overview=full&geometries=geojson`,
+  ];
+
+  for (const url of candidateEndpoints) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6000);
+
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'LokayanaApp/1.0' },
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.routes && data.routes.length > 0) {
+          const route = data.routes[0];
+          const roadDistanceKm = Number((route.distance / 1000).toFixed(1));
+          const baseDurationMinutes = Math.round(route.duration / 60);
+
+          const carDurationMinutes = Math.max(
+            Math.round(baseDurationMinutes * 1.1),
+            Math.round((roadDistanceKm / 28) * 60)
+          );
+          const motorDurationMinutes = Math.max(
+            Math.round(baseDurationMinutes * 0.8),
+            Math.round((roadDistanceKm / 40) * 60)
+          );
+
+          const polylineCoords: Coordinate[] = route.geometry.coordinates.map(
+            ([lng, lat]: [number, number]) => ({ lat, lng })
+          );
+
+          const timeDiff = carDurationMinutes - motorDurationMinutes;
+          const stopCount = points.length - 1;
+          const stopLabel = stopCount > 1 ? `${stopCount} pemberhentian` : '1 destinasi';
+
+          const summaryNote =
+            timeDiff > 5
+              ? `🛵 Motor rute tercepat untuk ${stopLabel} (hemat ~${timeDiff} mnt vs mobil)`
+              : `Jalur optimal ditemukan untuk ${stopLabel}.`;
+
+          return {
+            straightDistanceKm: Number(totalStraight.toFixed(1)),
+            roadDistanceKm,
+            carDurationMinutes,
+            motorDurationMinutes,
+            fastestMode: 'MOTOR',
+            polylineCoords,
+            summaryNote,
+          };
+        }
+      }
+    } catch {
+      // Coba mirror berikutnya
+      continue;
+    }
+  }
+
+  // Fallback gabungan jika seluruh OSRM endpoint offline
+  const fallbackPolyline: Coordinate[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const curve = generateFallbackCurve(points[i], points[i + 1]);
+    if (i > 0) curve.shift(); // Hindari duplikasi titik sambungan
+    fallbackPolyline.push(...curve);
+  }
+
+  const roadDistanceKm = Number((totalStraight * 1.32).toFixed(1));
+  const carDurationMinutes = Math.max(12, Math.round((roadDistanceKm / 28) * 60));
+  const motorDurationMinutes = Math.max(9, Math.round((roadDistanceKm / 38) * 60));
+  const timeDiff = carDurationMinutes - motorDurationMinutes;
+
+  return {
+    straightDistanceKm: Number(totalStraight.toFixed(1)),
+    roadDistanceKm,
+    carDurationMinutes,
+    motorDurationMinutes,
+    fastestMode: 'MOTOR',
+    polylineCoords: fallbackPolyline,
+    summaryNote: `🛵 Motor rute tercepat (hemat ~${timeDiff} mnt di jalanan Bali)`,
+  };
+}
+
+/**
+ * Kompatibilitas mundur untuk kalkulasi rute 2 titik (Origin -> Single Destination).
  */
 export async function calculateFastestRoute(
   origin: Coordinate,
   destination: Coordinate
 ): Promise<RouteInfo> {
-  const straightDist = calculateHaversineDistance(origin, destination);
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000); // 6s timeout
-
-    const url = `https://router.project-osrm.org/route/v1/driving/${origin.lng.toFixed(6)},${origin.lat.toFixed(6)};${destination.lng.toFixed(6)},${destination.lat.toFixed(6)}?overview=full&geometries=geojson`;
-
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'LokayanaApp/1.0' },
-    });
-    clearTimeout(timeout);
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
-        const roadDistanceKm = Number((route.distance / 1000).toFixed(1));
-        const baseDurationMinutes = Math.round(route.duration / 60);
-
-        // Estimasi lalu lintas Bali:
-        // Mobil: rata-rata 28-32 km/jam (sering kena macet di bypass/jalan sempit)
-        // Motor: rata-rata 38-42 km/jam (bisa lewat jalur alternatif/gang tikus khas Bali)
-        const carDurationMinutes = Math.max(
-          Math.round(baseDurationMinutes * 1.1),
-          Math.round((roadDistanceKm / 28) * 60)
-        );
-        const motorDurationMinutes = Math.max(
-          Math.round(baseDurationMinutes * 0.8),
-          Math.round((roadDistanceKm / 40) * 60)
-        );
-
-        const polylineCoords: Coordinate[] = route.geometry.coordinates.map(
-          ([lng, lat]: [number, number]) => ({ lat, lng })
-        );
-
-        const timeDiff = carDurationMinutes - motorDurationMinutes;
-        const summaryNote =
-          timeDiff > 5
-            ? `🛵 Sepeda Motor adalah rute tercepat (hemat ~${timeDiff} menit dibanding mobil)`
-            : 'Jalur optimal ditemukan, estimasi waktu tempuh lancar.';
-
-        return {
-          straightDistanceKm: Number(straightDist.toFixed(1)),
-          roadDistanceKm,
-          carDurationMinutes,
-          motorDurationMinutes,
-          fastestMode: 'MOTOR',
-          polylineCoords,
-          summaryNote,
-        };
-      }
-    }
-  } catch (err) {
-    console.warn('OSRM routing fetch failed, using realistic fallback:', err);
-  }
-
-  // Fallback jika API OSRM tidak terjangkau
-  const roadDistanceKm = Number((straightDist * 1.32).toFixed(1));
-  const carDurationMinutes = Math.max(10, Math.round((roadDistanceKm / 28) * 60));
-  const motorDurationMinutes = Math.max(8, Math.round((roadDistanceKm / 38) * 60));
-  const timeDiff = carDurationMinutes - motorDurationMinutes;
-
-  return {
-    straightDistanceKm: Number(straightDist.toFixed(1)),
-    roadDistanceKm,
-    carDurationMinutes,
-    motorDurationMinutes,
-    fastestMode: 'MOTOR',
-    polylineCoords: generateFallbackCurve(origin, destination),
-    summaryNote: `🛵 Sepeda Motor tercepat (hemat ~${timeDiff} menit di lalu lintas Bali)`,
-  };
+  return calculateMultiStopRoute([origin, destination]);
 }

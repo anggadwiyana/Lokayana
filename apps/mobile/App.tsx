@@ -49,6 +49,13 @@ export default function App() {
       if (currentScreen.name === 'GemList') {
         const prevParams = currentScreen.params;
         try {
+          const currentDestinations =
+            prevParams.orderedDestinations && prevParams.orderedDestinations.length > 0
+              ? prevParams.orderedDestinations.map((d) =>
+                  d.id === prevParams.destination.destinationObj?.id ? gem : d
+                )
+              : [gem];
+
           const newResponse = await getRecommendations(
             prevParams.origin,
             {
@@ -56,7 +63,8 @@ export default function App() {
               lng: gem.lng,
               name: gem.name,
               destinationObj: gem,
-            }
+            },
+            currentDestinations
           );
           setCurrentScreen({
             name: 'GemList',

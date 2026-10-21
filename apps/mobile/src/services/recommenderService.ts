@@ -5,7 +5,11 @@ import type {
   RecommendationResponse,
   SearchArea,
 } from '../types';
-import { calculateHaversineDistance, calculateFastestRoute } from './routingService';
+import {
+  calculateHaversineDistance,
+  calculateGreedyOrder,
+  calculateMultiStopRoute,
+} from './routingService';
 import { getAllDestinations, findNearestDestination } from './destinationService';
 
 const KEYWORD_LIST = [
@@ -33,7 +37,7 @@ function calculateSimilarityScore(
   distanceFromHubKm: number
 ): { score: number; reason: string } {
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
 
   // 1. Kesamaan Kategori (Bobot Maks: 45)
   if (candidate.category === target.category) {
@@ -79,7 +83,7 @@ function calculateSimilarityScore(
   const proximityBonus = Math.max(0, Math.round((15 - distanceFromHubKm) / 3));
   score += proximityBonus;
 
-  // Normalisasi skor antara 60% - 99% agar informatif bagi pengguna
+  // Normalisasi skor antara 60% - 99%
   const finalScore = Math.min(99, Math.max(62, Math.round(score)));
   const mainReason = reasons.length > 0 ? reasons[0] : `Alternatif populer di radius 15 km`;
 
@@ -90,7 +94,6 @@ function calculateSimilarityScore(
  * Menghitung reward poin gamifikasi Lokayana
  */
 function calculatePoints(reviewCount: number, similarityScore: number): { reward: number; bonus: number } {
-  // Tempat dengan sedikit ulasan (hidden gem) memberi poin lebih besar
   if (reviewCount < 10) {
     return { reward: 80, bonus: 50 };
   } else if (reviewCount < 50) {
@@ -102,41 +105,80 @@ function calculatePoints(reviewCount: number, similarityScore: number): { reward
 }
 
 /**
- * Engine Utama Rekomendasi Lokayana AI
- * Mengimplementasikan:
- *  - Perhitungan rute tercepat
+ * Engine Utama Rekomendasi & Optimasi Rute Lokayana AI
+ * Mendukung:
+ *  - Destinasi tunggal maupun multi-tujuan (Multi-Stop Trip)
+ *  - Algoritma Greedy TSP untuk menentukan urutan kunjungan tercepat
  *  - Logika radius:
- *    * Jika jarak > 15 km: 2 titik radius (Origin 15 km + Destination 15 km)
+ *    * Jika jarak > 15 km: 2 titik radius (Origin 15 km + Destinasi 15 km)
  *    * Jika jarak <= 15 km: 1 titik radius gabungan (15 km)
- *  - Rekomendasi alternatif serupa dengan destinasi tujuan
+ *    * Multi-destinasi: radius 15 km di setiap simpul rute
+ *  - Rekomendasi alternatif serupa di sepanjang zona 15 km
  */
 export async function getRecommendations(
   origin: Coordinate & { name: string },
-  destination: Coordinate & { name: string; destinationObj?: Destination | null }
+  destination: Coordinate & { name: string; destinationObj?: Destination | null },
+  selectedDestinations?: Destination[]
 ): Promise<RecommendationResponse> {
   const allDestinations = getAllDestinations();
 
-  // Tentukan target destinasi tujuan
-  const targetDestination: Destination =
-    destination.destinationObj ??
-    findNearestDestination(destination);
+  // Tentukan daftar target destinasi
+  let targets: Destination[] = [];
+  if (selectedDestinations && selectedDestinations.length > 0) {
+    targets = [...selectedDestinations];
+  } else if (destination.destinationObj) {
+    targets = [destination.destinationObj];
+  } else {
+    targets = [findNearestDestination(destination)];
+  }
 
-  // 1. Hitung jarak garis lurus
-  const straightDistanceKm = calculateHaversineDistance(origin, destination);
+  // 1. Urutkan destinasi menggunakan Greedy TSP (Nearest Neighbour)
+  const orderedDestinations = calculateGreedyOrder(origin, targets);
+  const primaryDestination = orderedDestinations[orderedDestinations.length - 1] ?? targets[0];
+
   const RADIUS_KM = 15.0;
+  const isMultiStop = orderedDestinations.length > 1;
 
   // 2. Evaluasi Aturan Radius (Requirement 5 & 6)
-  const isDualRadius = straightDistanceKm > RADIUS_KM;
+  const straightDistanceKm = isMultiStop
+    ? orderedDestinations.reduce((acc, cur, idx) => {
+        const prev = idx === 0 ? origin : orderedDestinations[idx - 1];
+        return acc + calculateHaversineDistance(prev, cur);
+      }, 0)
+    : calculateHaversineDistance(origin, primaryDestination);
+
+  const isDualRadius = isMultiStop || straightDistanceKm > RADIUS_KM;
 
   const searchAreas: SearchArea[] = [];
-  if (isDualRadius) {
+  if (isMultiStop) {
+    // Radius awal
+    searchAreas.push({
+      label: 'ORIGIN',
+      latitude: origin.lat,
+      longitude: origin.lng,
+      radiusKm: RADIUS_KM,
+      title: 'Radius Titik Awal (15 km)',
+      description: `Zona keberangkatan sekitar ${origin.name}`,
+    });
+    // Radius setiap pemberhentian
+    orderedDestinations.forEach((dest, i) => {
+      searchAreas.push({
+        label: 'DESTINATION',
+        latitude: dest.lat,
+        longitude: dest.lng,
+        radiusKm: RADIUS_KM,
+        title: `Stop ${i + 1}: ${dest.name} (15 km)`,
+        description: `Zona destinasi ${dest.name}`,
+      });
+    });
+  } else if (isDualRadius) {
     searchAreas.push({
       label: 'DESTINATION',
-      latitude: destination.lat,
-      longitude: destination.lng,
+      latitude: primaryDestination.lat,
+      longitude: primaryDestination.lng,
       radiusKm: RADIUS_KM,
       title: 'Radius Destinasi (15 km)',
-      description: `Mencari alternatif serupa di sekitar ${destination.name}`,
+      description: `Mencari alternatif serupa di sekitar ${primaryDestination.name}`,
     });
     searchAreas.push({
       label: 'ORIGIN',
@@ -149,44 +191,62 @@ export async function getRecommendations(
   } else {
     searchAreas.push({
       label: 'MERGED',
-      latitude: destination.lat,
-      longitude: destination.lng,
+      latitude: primaryDestination.lat,
+      longitude: primaryDestination.lng,
       radiusKm: RADIUS_KM,
       title: 'Radius Tunggal (15 km)',
       description: `Jarak perjalanan ${straightDistanceKm.toFixed(1)} km (≤ 15 km), pencarian alternatif difokuskan dalam 1 radius 15 km`,
     });
   }
 
+  // Set ID destinasi yang sudah dipilih user agar tidak direkomendasikan kembali
+  const selectedIds = new Set(targets.map((t) => t.id));
+
   // 3. Filter calon destinasi dalam radius 15 km
   const candidates: AlternativeDestination[] = [];
 
   for (const candidate of allDestinations) {
-    // Jangan rekomendasikan tempat yang persis sama dengan destinasi utama
-    if (candidate.id === targetDestination.id) continue;
-    if (
-      Math.abs(candidate.lat - destination.lat) < 0.0001 &&
-      Math.abs(candidate.lng - destination.lng) < 0.0001
-    ) {
-      continue;
-    }
+    if (selectedIds.has(candidate.id)) continue;
 
+    // Cek jarak ke origin
     const distToOrigin = calculateHaversineDistance(origin, candidate);
-    const distToDest = calculateHaversineDistance(destination, candidate);
+
+    // Cari stop terdekat ke kandidat
+    let nearestStop = primaryDestination;
+    let minDistToStop = Infinity;
+
+    for (const stop of orderedDestinations) {
+      const d = calculateHaversineDistance(stop, candidate);
+      if (d < minDistToStop) {
+        minDistToStop = d;
+        nearestStop = stop;
+      }
+    }
 
     let eligible = false;
     let nearestCenter: 'ORIGIN' | 'DESTINATION' | 'MERGED' = 'DESTINATION';
-    let distanceFromHubKm = distToDest;
+    let distanceFromHubKm = minDistToStop;
 
-    if (isDualRadius) {
-      const inDestRadius = distToDest <= RADIUS_KM;
+    if (isMultiStop) {
+      if (minDistToStop <= RADIUS_KM || distToOrigin <= RADIUS_KM) {
+        eligible = true;
+        if (minDistToStop <= distToOrigin) {
+          nearestCenter = 'DESTINATION';
+          distanceFromHubKm = minDistToStop;
+        } else {
+          nearestCenter = 'ORIGIN';
+          distanceFromHubKm = distToOrigin;
+        }
+      }
+    } else if (isDualRadius) {
+      const inDestRadius = minDistToStop <= RADIUS_KM;
       const inOriginRadius = distToOrigin <= RADIUS_KM;
 
       if (inDestRadius && inOriginRadius) {
         eligible = true;
-        // Prioritaskan label hub yang lebih dekat
-        if (distToDest <= distToOrigin) {
+        if (minDistToStop <= distToOrigin) {
           nearestCenter = 'DESTINATION';
-          distanceFromHubKm = distToDest;
+          distanceFromHubKm = minDistToStop;
         } else {
           nearestCenter = 'ORIGIN';
           distanceFromHubKm = distToOrigin;
@@ -194,7 +254,7 @@ export async function getRecommendations(
       } else if (inDestRadius) {
         eligible = true;
         nearestCenter = 'DESTINATION';
-        distanceFromHubKm = distToDest;
+        distanceFromHubKm = minDistToStop;
       } else if (inOriginRadius) {
         eligible = true;
         nearestCenter = 'ORIGIN';
@@ -202,22 +262,21 @@ export async function getRecommendations(
       }
     } else {
       // Single radius mode
-      if (distToDest <= RADIUS_KM) {
+      if (minDistToStop <= RADIUS_KM) {
         eligible = true;
         nearestCenter = 'MERGED';
-        distanceFromHubKm = distToDest;
+        distanceFromHubKm = minDistToStop;
       }
     }
 
     if (eligible) {
       const { score, reason } = calculateSimilarityScore(
-        targetDestination,
+        nearestStop,
         candidate,
         distanceFromHubKm
       );
       const { reward, bonus } = calculatePoints(candidate.reviewCount, score);
 
-      // Hitung perkiraan waktu tempuh motor dari hub terdekat
       const estimatedTravelMinutes = Math.max(
         5,
         Math.round((distanceFromHubKm / 35) * 60)
@@ -226,7 +285,7 @@ export async function getRecommendations(
       candidates.push({
         ...candidate,
         similarityScore: score,
-        similarityReason: reason,
+        similarityReason: `${reason} (dekat ${nearestStop.name})`,
         distanceFromHubKm: Number(distanceFromHubKm.toFixed(1)),
         nearestCenter,
         estimatedTravelMinutes,
@@ -249,18 +308,24 @@ export async function getRecommendations(
     return b.rating - a.rating;
   });
 
-  // Ambil hingga 30 alternatif terbaik
   const topAlternatives = candidates.slice(0, 30);
 
-  // 5. Hitung rute tercepat secara paralel/asynchronous
-  const route = await calculateFastestRoute(origin, destination);
+  // 5. Hitung rute tercepat (multi-stop)
+  const routePoints = [origin, ...orderedDestinations];
+  const route = await calculateMultiStopRoute(routePoints);
 
   return {
     origin,
     destination: {
-      ...destination,
-      destinationObj: targetDestination,
+      lat: primaryDestination.lat,
+      lng: primaryDestination.lng,
+      name: isMultiStop
+        ? `${orderedDestinations.length} Destinasi (${primaryDestination.name})`
+        : primaryDestination.name,
+      destinationObj: primaryDestination,
     },
+    orderedDestinations,
+    stops: orderedDestinations,
     straightDistanceKm: Number(straightDistanceKm.toFixed(1)),
     isDualRadius,
     searchAreas,

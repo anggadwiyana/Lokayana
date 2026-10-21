@@ -6,11 +6,12 @@
  *    - GPS Otomatis (Lokasi Saat Ini)
  *    - Pilih dari Peta Interaktif (MapLocationPickerModal)
  *    - Preset lokasi populer Bali (Kuta, Bandara, Ubud, Sanur, dll)
- * 2. Pemilihan Destinasi Wisata:
+ * 2. Pemilihan Destinasi Wisata (Mendukung Multi-Destinasi / Rute Berurutan):
+ *    - Pengguna bisa memilih 1 atau lebih destinasi wisata sekaligus
  *    - Filter Kategori (Pantai, Pura, Patung & Monumen, Air Terjun, Bukit & Tebing, dll)
- *    - Pencarian spesifik live autocomplete dari 1.445 destinasi Bali
- *    - Pilih dari Peta atau Rekomendasi Unggulan Bali
- * 3. Navigasi menuju kalkulasi Rute Tercepat & Rekomendasi Cerdas (Radius 15 km)
+ *    - Pencarian live autocomplete dari 1.445 destinasi Bali
+ *    - Quick add dari Rekomendasi Unggulan Bali atau Peta Interaktif
+ * 3. Navigasi menuju kalkulasi Rute Tercepat (Greedy TSP & OSRM) & Rekomendasi Cerdas (Radius 15 km)
  */
 import React, { useState, useCallback, useMemo } from 'react';
 import {
@@ -52,10 +53,8 @@ export default function HomeScreen({ onNavigate }: Props) {
   const [gpsLoading, setGpsLoading] = useState(false);
   const [showOriginMapModal, setShowOriginMapModal] = useState(false);
 
-  // --- Destinasi ---
-  const [destination, setDestination] = useState<Coordinate | null>(null);
-  const [destinationName, setDestinationName] = useState('');
-  const [selectedDestinationObj, setSelectedDestinationObj] = useState<Destination | null>(null);
+  // --- Multi-Destinasi ---
+  const [selectedDestinations, setSelectedDestinations] = useState<Destination[]>([]);
   const [showDestMapModal, setShowDestMapModal] = useState(false);
 
   // --- Search & Kategori ---
@@ -83,7 +82,7 @@ export default function HomeScreen({ onNavigate }: Props) {
       const nearest = findNearestDestination(coord);
       setOriginName(`Lokasi Saat Ini (${nearest.district})`);
     } catch {
-      // Fallback jika GPS tidak tersedia (misal di simulator)
+      // Fallback simulasi GPS jika tidak tersedia
       setOrigin({ lat: -8.7482, lng: 115.1672 });
       setOriginName('Bandara Ngurah Rai (Simulasi GPS)');
       Alert.alert(
@@ -101,19 +100,40 @@ export default function HomeScreen({ onNavigate }: Props) {
     setOriginName(preset.name);
   };
 
-  // ── Pilih Destinasi dari Item ─────────────────────────────────────────
-  const handleSelectDestination = (dest: Destination) => {
-    setDestination({ lat: dest.lat, lng: dest.lng });
-    setDestinationName(dest.name);
-    setSelectedDestinationObj(dest);
-    setSearchQuery('');
+  // ── Toggle Tambah/Hapus Destinasi ─────────────────────────────────────
+  const handleToggleDestination = (dest: Destination) => {
+    setSelectedDestinations((prev) => {
+      const exists = prev.some((d) => d.id === dest.id);
+      if (exists) {
+        return prev.filter((d) => d.id !== dest.id);
+      }
+      if (prev.length >= 8) {
+        Alert.alert('Batas Maksimal', 'Maksimal 8 destinasi untuk 1 rangkaian rute perjalanan.');
+        return prev;
+      }
+      return [...prev, dest];
+    });
+  };
+
+  const handleRemoveDestination = (id: string) => {
+    setSelectedDestinations((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const handleClearDestinations = () => {
+    setSelectedDestinations([]);
   };
 
   // ── Hasil Pencarian Live Destinasi ─────────────────────────────────────
   const searchResults = useMemo(() => {
     if (!searchQuery.trim() && !selectedCategory) return [];
-    return searchDestinations(searchQuery, selectedCategory?.name).slice(0, 8);
+    return searchDestinations(searchQuery, selectedCategory?.name).slice(0, 10);
   }, [searchQuery, selectedCategory]);
+
+  // Set ID destinasi yang sudah dipilih untuk highlight cepat
+  const selectedIdSet = useMemo(
+    () => new Set(selectedDestinations.map((d) => d.id)),
+    [selectedDestinations]
+  );
 
   // ── Submit & Cari Rute + Rekomendasi Cerdas ───────────────────────────
   const handleSearchRoute = useCallback(async () => {
@@ -121,16 +141,23 @@ export default function HomeScreen({ onNavigate }: Props) {
       Alert.alert('Peringatan', 'Silakan tentukan titik awal keberangkatan Anda.');
       return;
     }
-    if (!destination) {
-      Alert.alert('Peringatan', 'Silakan pilih tempat wisata yang akan dikunjungi.');
+    if (selectedDestinations.length === 0) {
+      Alert.alert('Peringatan', 'Silakan pilih minimal 1 tempat wisata yang ingin dikunjungi.');
       return;
     }
 
     setSearchingRoute(true);
     try {
+      const primaryDest = selectedDestinations[selectedDestinations.length - 1];
       const response = await getRecommendations(
         { ...origin, name: originName },
-        { ...destination, name: destinationName, destinationObj: selectedDestinationObj }
+        {
+          lat: primaryDest.lat,
+          lng: primaryDest.lng,
+          name: primaryDest.name,
+          destinationObj: primaryDest,
+        },
+        selectedDestinations
       );
 
       onNavigate({
@@ -142,7 +169,7 @@ export default function HomeScreen({ onNavigate }: Props) {
     } finally {
       setSearchingRoute(false);
     }
-  }, [origin, originName, destination, destinationName, selectedDestinationObj, onNavigate]);
+  }, [origin, originName, selectedDestinations, onNavigate]);
 
   return (
     <View style={styles.root}>
@@ -152,7 +179,7 @@ export default function HomeScreen({ onNavigate }: Props) {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.appName}>Lokayana AI</Text>
-          <Text style={styles.appSub}>Navigasi Cerdas & Hidden Gem Bali</Text>
+          <Text style={styles.appSub}>Navigasi Cerdas & Rekomendasi Wisata Bali</Text>
         </View>
         <TouchableOpacity
           style={styles.profileBtn}
@@ -258,36 +285,61 @@ export default function HomeScreen({ onNavigate }: Props) {
           <View style={styles.arrowLine} />
         </View>
 
-        {/* ── CARD 2: TEMPAT WISATA TUJUAN ── */}
+        {/* ── CARD 2: TEMPAT WISATA TUJUAN (MULTI-DESTINASI) ── */}
         <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <View style={[styles.dot, { backgroundColor: '#EF4444' }]} />
-            <Text style={styles.cardTitle}>2. Tempat Wisata Tujuan</Text>
-          </View>
-
-          {destination ? (
-            <View style={[styles.locationBadge, styles.destBadge]}>
-              <Ionicons name="flag" size={20} color="#DC2626" />
-              <View style={styles.locationBadgeTextWrap}>
-                <Text style={styles.locationBadgeName}>{destinationName}</Text>
-                <Text style={styles.locationBadgeCoord}>
-                  {selectedDestinationObj
-                    ? `${selectedDestinationObj.category} • ${selectedDestinationObj.district}, ${selectedDestinationObj.city}`
-                    : `${destination.lat.toFixed(4)}, ${destination.lng.toFixed(4)}`}
+          <View style={styles.cardHeaderBetween}>
+            <View style={styles.cardHeader}>
+              <View style={[styles.dot, { backgroundColor: '#EF4444' }]} />
+              <Text style={styles.cardTitle}>2. Tempat Wisata Tujuan</Text>
+            </View>
+            {selectedDestinations.length > 0 && (
+              <View style={styles.selectedCountBadge}>
+                <Text style={styles.selectedCountText}>
+                  {selectedDestinations.length} Dipilih
                 </Text>
               </View>
-              <TouchableOpacity
-                onPress={() => {
-                  setDestination(null);
-                  setDestinationName('');
-                  setSelectedDestinationObj(null);
-                }}
-              >
-                <Ionicons name="close-circle" size={20} color={colors.muted} />
-              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Daftar Destinasi yang Dipilih (Chips / List) */}
+          {selectedDestinations.length > 0 ? (
+            <View style={styles.selectedListContainer}>
+              <View style={styles.selectedHeaderRow}>
+                <Text style={styles.selectedSubTitle}>Rencana Destinasi Kunjungan:</Text>
+                {selectedDestinations.length > 1 && (
+                  <TouchableOpacity onPress={handleClearDestinations}>
+                    <Text style={styles.clearAllText}>Hapus Semua</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {selectedDestinations.map((dest, idx) => (
+                <View key={dest.id} style={styles.selectedDestCard}>
+                  <View style={styles.destIndexBadge}>
+                    <Text style={styles.destIndexText}>{idx + 1}</Text>
+                  </View>
+                  <View style={styles.selectedDestInfo}>
+                    <Text style={styles.selectedDestName} numberOfLines={1}>
+                      {dest.name}
+                    </Text>
+                    <Text style={styles.selectedDestMeta}>
+                      {dest.category} • {dest.district} • ★ {dest.rating.toFixed(1)}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.destRemoveBtn}
+                    onPress={() => handleRemoveDestination(dest.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close-circle" size={20} color={colors.muted} />
+                  </TouchableOpacity>
+                </View>
+              ))}
             </View>
           ) : (
-            <Text style={styles.emptyHint}>Cari nama tempat atau pilih berdasarkan kategori</Text>
+            <Text style={styles.emptyHint}>
+              Pilih satu atau beberapa tempat wisata di bawah atau cari secara spesifik:
+            </Text>
           )}
 
           {/* Search Input Bar */}
@@ -295,7 +347,7 @@ export default function HomeScreen({ onNavigate }: Props) {
             <Ionicons name="search" size={18} color={colors.muted} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Cari tempat spesifik (cth: Tanah Lot, GWK)…"
+              placeholder="Cari tempat spesifik (cth: Tanah Lot, GWK, Kuta)…"
               placeholderTextColor={colors.muted}
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -319,65 +371,109 @@ export default function HomeScreen({ onNavigate }: Props) {
             onSelect={(cat) => setSelectedCategory(cat)}
           />
 
-          {/* Dropdown Live Hasil Pencarian */}
+          {/* Dropdown Live Hasil Pencarian / Kategori */}
           {searchResults.length > 0 && (
             <View style={styles.searchResultsContainer}>
               <Text style={styles.searchResultTitle}>
-                {searchQuery ? `Hasil Pencarian (${searchResults.length})` : `Wisata Kategori ${selectedCategory?.name}`}
+                {searchQuery
+                  ? `Hasil Pencarian "${searchQuery}" (${searchResults.length})`
+                  : `Wisata Kategori ${selectedCategory?.name} (${searchResults.length})`}
               </Text>
-              {searchResults.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.searchResultItem}
-                  onPress={() => handleSelectDestination(item)}
-                  activeOpacity={0.7}
-                >
-                  {item.imageUrl ? (
-                    <Image source={{ uri: item.imageUrl }} style={styles.resultThumb} />
-                  ) : (
-                    <View style={[styles.resultThumb, styles.resultThumbFallback]}>
-                      <Ionicons name="compass" size={16} color={colors.sea} />
+              {searchResults.map((item) => {
+                const isSelected = selectedIdSet.has(item.id);
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[
+                      styles.searchResultItem,
+                      isSelected && styles.searchResultItemSelected,
+                    ]}
+                    onPress={() => handleToggleDestination(item)}
+                    activeOpacity={0.7}
+                  >
+                    {item.imageUrl ? (
+                      <Image source={{ uri: item.imageUrl }} style={styles.resultThumb} />
+                    ) : (
+                      <View style={[styles.resultThumb, styles.resultThumbFallback]}>
+                        <Ionicons name="compass" size={16} color={colors.sea} />
+                      </View>
+                    )}
+                    <View style={styles.resultInfo}>
+                      <Text style={styles.resultName} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      <Text style={styles.resultMeta}>
+                        {item.category} • {item.district} • ★ {item.rating.toFixed(1)}
+                      </Text>
                     </View>
-                  )}
-                  <View style={styles.resultInfo}>
-                    <Text style={styles.resultName} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text style={styles.resultMeta}>
-                      {item.category} • {item.district} • ★ {item.rating.toFixed(1)}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.sea} />
-                </TouchableOpacity>
-              ))}
+                    <View
+                      style={[
+                        styles.toggleAddBadge,
+                        isSelected && styles.toggleAddBadgeSelected,
+                      ]}
+                    >
+                      <Ionicons
+                        name={isSelected ? 'checkmark' : 'add'}
+                        size={15}
+                        color={isSelected ? '#FFFFFF' : colors.sea}
+                      />
+                      <Text
+                        style={[
+                          styles.toggleAddText,
+                          isSelected && styles.toggleAddTextSelected,
+                        ]}
+                      >
+                        {isSelected ? 'Dipilih' : 'Tambah'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           )}
 
           {/* Curated Bali Highlights jika belum ada input */}
-          {!destination && searchResults.length === 0 && (
+          {searchResults.length === 0 && (
             <View style={styles.highlightsWrap}>
-              <Text style={styles.highlightsTitle}>Destinasi Populer Bali:</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.highlightsScroll}>
-                {POPULAR_DESTINATIONS.map((dest) => (
-                  <TouchableOpacity
-                    key={dest.id}
-                    style={styles.highlightCard}
-                    onPress={() => handleSelectDestination(dest)}
-                    activeOpacity={0.8}
-                  >
-                    {dest.imageUrl ? (
-                      <Image source={{ uri: dest.imageUrl }} style={styles.highlightImg} />
-                    ) : (
-                      <View style={[styles.highlightImg, styles.highlightImgFallback]}>
-                        <Ionicons name="image" size={20} color={colors.sea} />
+              <Text style={styles.highlightsTitle}>Rekomendasi Populer Bali:</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.highlightsScroll}
+              >
+                {POPULAR_DESTINATIONS.map((dest) => {
+                  const isSelected = selectedIdSet.has(dest.id);
+                  return (
+                    <TouchableOpacity
+                      key={dest.id}
+                      style={[
+                        styles.highlightCard,
+                        isSelected && styles.highlightCardSelected,
+                      ]}
+                      onPress={() => handleToggleDestination(dest)}
+                      activeOpacity={0.8}
+                    >
+                      {dest.imageUrl ? (
+                        <Image source={{ uri: dest.imageUrl }} style={styles.highlightImg} />
+                      ) : (
+                        <View style={[styles.highlightImg, styles.highlightImgFallback]}>
+                          <Ionicons name="image" size={20} color={colors.sea} />
+                        </View>
+                      )}
+                      <Text style={styles.highlightName} numberOfLines={1}>
+                        {dest.name}
+                      </Text>
+                      <View style={styles.highlightBottomRow}>
+                        <Text style={styles.highlightCategory}>{dest.category}</Text>
+                        <Ionicons
+                          name={isSelected ? 'checkmark-circle' : 'add-circle-outline'}
+                          size={18}
+                          color={isSelected ? colors.sea : colors.muted}
+                        />
                       </View>
-                    )}
-                    <Text style={styles.highlightName} numberOfLines={1}>
-                      {dest.name}
-                    </Text>
-                    <Text style={styles.highlightCategory}>{dest.category}</Text>
-                  </TouchableOpacity>
-                ))}
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             </View>
           )}
@@ -391,7 +487,8 @@ export default function HomeScreen({ onNavigate }: Props) {
           </View>
           <Text style={styles.radiusRuleDesc}>
             • <Text style={styles.boldText}>Jarak {'>'} 15 km:</Text> Sistem mencari alternatif di <Text style={styles.boldText}>2 radius</Text> (15 km dari titik awal & 15 km dari destinasi).{'\n'}
-            • <Text style={styles.boldText}>Jarak ≤ 15 km:</Text> Sistem menggabungkannya ke dalam <Text style={styles.boldText}>1 radius</Text> (15 km).
+            • <Text style={styles.boldText}>Jarak ≤ 15 km:</Text> Sistem menggabungkannya ke dalam <Text style={styles.boldText}>1 radius</Text> (15 km).{'\n'}
+            • <Text style={styles.boldText}>Multi-Destinasi:</Text> Mengoptimalkan urutan rute (Greedy TSP) & memetakan alternatif di seluruh simpul 15 km.
           </Text>
         </View>
 
@@ -399,10 +496,11 @@ export default function HomeScreen({ onNavigate }: Props) {
         <TouchableOpacity
           style={[
             styles.submitBtn,
-            (!origin || !destination || searchingRoute) && styles.submitBtnDisabled,
+            (!origin || selectedDestinations.length === 0 || searchingRoute) &&
+              styles.submitBtnDisabled,
           ]}
           onPress={handleSearchRoute}
-          disabled={!origin || !destination || searchingRoute}
+          disabled={!origin || selectedDestinations.length === 0 || searchingRoute}
           activeOpacity={0.85}
         >
           {searchingRoute ? (
@@ -411,7 +509,13 @@ export default function HomeScreen({ onNavigate }: Props) {
             <Ionicons name="compass" size={22} color={colors.ink} />
           )}
           <Text style={styles.submitBtnText}>
-            {searchingRoute ? 'Mengkalkulasi Rute & AI…' : 'Cari Rute & Alternatif Cerdas'}
+            {searchingRoute
+              ? 'Menghitung Rute Optimal & AI…'
+              : selectedDestinations.length > 1
+              ? `Rencanakan Rute Optimal (${selectedDestinations.length} Destinasi)`
+              : selectedDestinations.length === 1
+              ? 'Cari Rute & Alternatif Cerdas (1 Destinasi)'
+              : 'Pilih Destinasi Terlebih Dahulu'}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -432,12 +536,14 @@ export default function HomeScreen({ onNavigate }: Props) {
       <MapLocationPickerModal
         visible={showDestMapModal}
         title="Pilih Destinasi di Peta"
-        initialCoord={destination ?? { lat: -8.5069, lng: 115.2624 }}
-        onSelect={(coord, name) => {
-          setDestination(coord);
-          setDestinationName(name);
+        initialCoord={
+          selectedDestinations.length > 0
+            ? selectedDestinations[selectedDestinations.length - 1]
+            : { lat: -8.5069, lng: 115.2624 }
+        }
+        onSelect={(coord) => {
           const nearest = findNearestDestination(coord);
-          setSelectedDestinationObj(nearest);
+          handleToggleDestination(nearest);
         }}
         onClose={() => setShowDestMapModal(false)}
       />
@@ -474,9 +580,87 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
   },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardHeaderBetween: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
   dot: { width: 10, height: 10, borderRadius: 5 },
   cardTitle: { fontFamily: fonts.bold, fontSize: 16, color: colors.ink },
+  selectedCountBadge: {
+    backgroundColor: colors.sea,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  selectedCountText: {
+    fontFamily: fonts.bold,
+    fontSize: 11,
+    color: '#FFFFFF',
+  },
+  selectedListContainer: {
+    marginBottom: 12,
+    backgroundColor: colors.mist,
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 8,
+  },
+  selectedHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  selectedSubTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 12,
+    color: colors.sea,
+  },
+  clearAllText: {
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    color: '#DC2626',
+  },
+  selectedDestCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 10,
+  },
+  destIndexBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.sea,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destIndexText: {
+    fontFamily: fonts.extraBold,
+    fontSize: 12,
+    color: '#FFFFFF',
+  },
+  selectedDestInfo: { flex: 1 },
+  selectedDestName: {
+    fontFamily: fonts.bold,
+    fontSize: 13,
+    color: colors.ink,
+  },
+  selectedDestMeta: {
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    color: colors.muted,
+    marginTop: 1,
+  },
+  destRemoveBtn: { padding: 4 },
   locationBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -487,10 +671,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 10,
     marginBottom: 12,
-  },
-  destBadge: {
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
-    borderColor: 'rgba(239, 68, 68, 0.25)',
   },
   locationBadgeTextWrap: { flex: 1 },
   locationBadgeName: { fontFamily: fonts.bold, fontSize: 14, color: colors.ink },
@@ -575,7 +755,7 @@ const styles = StyleSheet.create({
     color: colors.sea,
     backgroundColor: colors.mist,
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 8,
   },
   searchResultItem: {
     flexDirection: 'row',
@@ -584,26 +764,62 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
   },
-  resultThumb: { width: 36, height: 36, borderRadius: 6, marginRight: 10 },
+  searchResultItemSelected: {
+    backgroundColor: 'rgba(27, 107, 102, 0.06)',
+  },
+  resultThumb: { width: 38, height: 38, borderRadius: 6, marginRight: 10 },
   resultThumbFallback: { backgroundColor: colors.mist, alignItems: 'center', justifyContent: 'center' },
   resultInfo: { flex: 1 },
   resultName: { fontFamily: fonts.bold, fontSize: 13, color: colors.ink },
   resultMeta: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, marginTop: 2 },
+  toggleAddBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: colors.mist,
+    borderWidth: 1,
+    borderColor: colors.sea,
+  },
+  toggleAddBadgeSelected: {
+    backgroundColor: colors.sea,
+    borderColor: colors.sea,
+  },
+  toggleAddText: {
+    fontFamily: fonts.bold,
+    fontSize: 11,
+    color: colors.sea,
+  },
+  toggleAddTextSelected: {
+    color: '#FFFFFF',
+  },
   highlightsWrap: { marginTop: 14 },
   highlightsTitle: { fontFamily: fonts.medium, fontSize: 12, color: colors.muted, marginBottom: 8 },
   highlightsScroll: { gap: 10 },
   highlightCard: {
-    width: 120,
+    width: 130,
     backgroundColor: colors.mist,
     borderRadius: 10,
     padding: 8,
     borderWidth: 1,
     borderColor: colors.line,
   },
-  highlightImg: { width: '100%', height: 60, borderRadius: 6, marginBottom: 6 },
+  highlightCardSelected: {
+    borderColor: colors.sea,
+    backgroundColor: 'rgba(27, 107, 102, 0.08)',
+  },
+  highlightImg: { width: '100%', height: 65, borderRadius: 6, marginBottom: 6 },
   highlightImgFallback: { backgroundColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
   highlightName: { fontFamily: fonts.bold, fontSize: 11, color: colors.ink },
-  highlightCategory: { fontFamily: fonts.regular, fontSize: 10, color: colors.muted, marginTop: 2 },
+  highlightBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  highlightCategory: { fontFamily: fonts.regular, fontSize: 10, color: colors.muted },
   radiusRuleCard: {
     backgroundColor: colors.turmericLight,
     borderRadius: 14,

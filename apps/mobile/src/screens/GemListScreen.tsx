@@ -2,15 +2,13 @@
  * GemListScreen — Hasil Navigasi Rute Tercepat & Rekomendasi Cerdas Lokayana AI
  *
  * Fitur:
- *  1. Peta Interaktif:
+ *  1. Peta Interaktif (OpenStreetMap/CartoDB tiles tanpa layar hitam di Android):
  *     - Marker Titik Awal (Biru)
- *     - Marker Destinasi Utama (Merah)
- *     - Polyline Rute Jalan (OSRM Driving Route)
- *     - Lingkaran Radius 15 km:
- *       * Jika jarak > 15 km: 2 Lingkaran (Origin 15 km & Destination 15 km)
- *       * Jika jarak <= 15 km: 1 Lingkaran (15 km)
- *     - Marker Tempat Alternatif Terkait
- *  2. Kartu Rute Tercepat (Komparasi Motor vs Mobil)
+ *     - Marker Destinasi Utama / Multi-Stop Pins Berurutan [1], [2], [3] (Teal)
+ *     - Polyline Rute Jalan Tercepat (OSRM Driving Route)
+ *     - Lingkaran Radius 15 km di setiap simpul rute
+ *     - Marker Tempat Alternatif Terkait (Emas)
+ *  2. Kartu Rute Tercepat (Komparasi Motor vs Mobil + Stop-by-stop)
  *  3. Filter Tab Alternatif (Semua / Dekat Destinasi / Dekat Titik Awal)
  *  4. Daftar Rekomendasi Tempat Serupa dengan Skor AI
  */
@@ -24,7 +22,7 @@ import {
   Platform,
   StatusBar,
 } from 'react-native';
-import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
+import MapView, { Marker, Circle, Polyline, UrlTile } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
 import type { AppScreen, RecommendationResponse, AlternativeDestination, Coordinate } from '../types';
@@ -39,9 +37,18 @@ interface Props {
 }
 
 /** Hitung wilayah MapView agar seluruh titik dan rute terlihat proporsional */
-function calcMapRegion(origin: Coordinate, destination: Coordinate) {
-  const lats = [origin.lat, destination.lat];
-  const lngs = [origin.lng, destination.lng];
+function calcMapRegion(points: Coordinate[]) {
+  if (points.length === 0) {
+    return {
+      latitude: -8.55,
+      longitude: 115.2,
+      latitudeDelta: 0.5,
+      longitudeDelta: 0.5,
+    };
+  }
+
+  const lats = points.map((p) => p.lat);
+  const lngs = points.map((p) => p.lng);
   const minLat = Math.min(...lats);
   const maxLat = Math.max(...lats);
   const minLng = Math.min(...lngs);
@@ -59,15 +66,32 @@ function calcMapRegion(origin: Coordinate, destination: Coordinate) {
 }
 
 export default function GemListScreen({ params, onNavigate, onSwitchDestination }: Props) {
-  const { origin, destination, straightDistanceKm, isDualRadius, searchAreas, route, alternatives } =
-    params;
+  const {
+    origin,
+    destination,
+    orderedDestinations,
+    stops,
+    straightDistanceKm,
+    isDualRadius,
+    searchAreas,
+    route,
+    alternatives,
+  } = params;
+
+  const effectiveStops = orderedDestinations ?? stops ?? [];
+  const isMultiStop = effectiveStops.length > 1;
 
   const mapRef = useRef<MapView>(null);
   const [selectedGem, setSelectedGem] = useState<AlternativeDestination | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [activeFilterTab, setActiveFilterTab] = useState<'ALL' | 'DESTINATION' | 'ORIGIN'>('ALL');
 
-  const region = useMemo(() => calcMapRegion(origin, destination), [origin, destination]);
+  const allKeyPoints = useMemo(
+    () => [origin, ...(effectiveStops.length > 0 ? effectiveStops : [destination])],
+    [origin, effectiveStops, destination]
+  );
+
+  const region = useMemo(() => calcMapRegion(allKeyPoints), [allKeyPoints]);
 
   // Filter alternatif berdasarkan tab yang dipilih
   const filteredAlternatives = useMemo(() => {
@@ -92,7 +116,6 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
   const handlePressCard = (gem: AlternativeDestination) => {
     setSelectedGem(gem);
     setDetailModalVisible(true);
-    // Animate map to the selected gem
     mapRef.current?.animateToRegion(
       {
         latitude: gem.lat,
@@ -120,10 +143,19 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
         <MapView
           ref={mapRef}
           style={styles.map}
+          mapType={Platform.OS === 'android' ? 'none' : 'standard'}
           initialRegion={region}
           showsUserLocation
           showsCompass
         >
+          {/* Tile Layer CartoDB/OSM untuk mencegah layar hitam di Android */}
+          <UrlTile
+            urlTemplate="https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
+            maximumZ={19}
+            flipY={false}
+            zIndex={-1}
+          />
+
           {/* Polyline Rute Tercepat OSRM */}
           {route.polylineCoords && route.polylineCoords.length > 0 && (
             <Polyline
@@ -137,14 +169,18 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
           )}
 
           {/* Lingkaran Radius 15 km */}
-          {searchAreas.map((area) => {
+          {searchAreas.map((area, idx) => {
             const isOriginArea = area.label === 'ORIGIN';
-            const strokeColor = isOriginArea ? 'rgba(37, 99, 235, 0.7)' : 'rgba(27, 107, 102, 0.75)';
-            const fillColor = isOriginArea ? 'rgba(37, 99, 235, 0.12)' : 'rgba(27, 107, 102, 0.13)';
+            const strokeColor = isOriginArea
+              ? 'rgba(37, 99, 235, 0.7)'
+              : 'rgba(27, 107, 102, 0.75)';
+            const fillColor = isOriginArea
+              ? 'rgba(37, 99, 235, 0.12)'
+              : 'rgba(27, 107, 102, 0.13)';
 
             return (
               <Circle
-                key={area.label}
+                key={`${area.label}-${idx}`}
                 center={{ latitude: area.latitude, longitude: area.longitude }}
                 radius={area.radiusKm * 1000} // 15,000 meter
                 fillColor={fillColor}
@@ -165,16 +201,39 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
             </View>
           </Marker>
 
-          {/* Marker Destinasi Utama */}
-          <Marker
-            coordinate={{ latitude: destination.lat, longitude: destination.lng }}
-            title="Destinasi Tujuan"
-            description={destination.name}
-          >
-            <View style={[styles.marker, styles.destMarker]}>
-              <Ionicons name="flag" size={14} color="#FFFFFF" />
-            </View>
-          </Marker>
+          {/* Marker Destinasi Multi-stop atau Tunggal */}
+          {effectiveStops.length > 0 ? (
+            effectiveStops.map((stop, idx) => {
+              const isLast = idx === effectiveStops.length - 1;
+              return (
+                <Marker
+                  key={stop.id}
+                  coordinate={{ latitude: stop.lat, longitude: stop.lng }}
+                  title={`Stop ${idx + 1}: ${stop.name}`}
+                  description={`${stop.category} • ${stop.district}`}
+                >
+                  <View
+                    style={[
+                      styles.marker,
+                      isLast ? styles.destMarker : styles.stopMarker,
+                    ]}
+                  >
+                    <Text style={styles.stopNumberText}>{idx + 1}</Text>
+                  </View>
+                </Marker>
+              );
+            })
+          ) : (
+            <Marker
+              coordinate={{ latitude: destination.lat, longitude: destination.lng }}
+              title="Destinasi Tujuan"
+              description={destination.name}
+            >
+              <View style={[styles.marker, styles.destMarker]}>
+                <Ionicons name="flag" size={14} color="#FFFFFF" />
+              </View>
+            </Marker>
+          )}
 
           {/* Marker Tempat Alternatif Serupa */}
           {filteredAlternatives.map((gem) => {
@@ -210,8 +269,13 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
         </TouchableOpacity>
       </View>
 
-      {/* ── Kartu Rute Tercepat (Komparasi Motor vs Mobil) ── */}
-      <FastestRouteCard route={route} origin={origin} destination={destination} />
+      {/* ── Kartu Rute Tercepat (Komparasi Motor vs Mobil + Multi-stop) ── */}
+      <FastestRouteCard
+        route={route}
+        origin={origin}
+        destination={destination}
+        stops={effectiveStops}
+      />
 
       {/* ── Radius Mode Status Card ── */}
       <View style={styles.radiusStatusBox}>
@@ -222,13 +286,17 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
             color={colors.sea}
           />
           <Text style={styles.radiusStatusTitle}>
-            {isDualRadius
+            {isMultiStop
+              ? `Rute Multi-Destinasi: ${effectiveStops.length} Tempat Wisata`
+              : isDualRadius
               ? `Mode 2 Radius: Jarak ${straightDistanceKm} km (> 15 km)`
               : `Mode 1 Radius: Jarak ${straightDistanceKm} km (≤ 15 km)`}
           </Text>
         </View>
         <Text style={styles.radiusStatusDesc}>
-          {isDualRadius
+          {isMultiStop
+            ? `Sistem menyusun urutan rute tercepat (Greedy TSP) dan memetakan zona 15 km di setiap titik destinasi.`
+            : isDualRadius
             ? `Karena jarak di atas 15 km, sistem mencari alternatif di 2 radius 15 km (dekat Titik Awal dan dekat Destinasi Tujuan).`
             : `Karena jarak di bawah 15 km, sistem menggabungkan pencarian dalam 1 radius 15 km di sekitar destinasi.`}
         </Text>
@@ -288,7 +356,7 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
       <View style={styles.listTitleWrap}>
         <Text style={styles.listTitle}>Rekomendasi Alternatif Serupa</Text>
         <Text style={styles.listSub}>
-          Disaring berdasarkan kesamaan vibe, rating, dan berada dalam radius 15 km
+          Disaring berdasarkan kemiripan vibe, rating tinggi, dan berada dalam radius 15 km
         </Text>
       </View>
     </View>
@@ -309,9 +377,11 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
         </TouchableOpacity>
         <View style={styles.navTitleWrap}>
           <Text style={styles.navRoute} numberOfLines={1}>
-            {origin.name} → {destination.name}
+            {isMultiStop
+              ? `${origin.name} → ${effectiveStops.length} Destinasi`
+              : `${origin.name} → ${destination.name}`}
           </Text>
-          <Text style={styles.navSub}>Rute & Rekomendasi Terkait</Text>
+          <Text style={styles.navSub}>Rute Optimal & Rekomendasi Terkait</Text>
         </View>
         <TouchableOpacity
           style={styles.profileBtn}
@@ -321,28 +391,25 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
         </TouchableOpacity>
       </View>
 
-      {/* ── Main List ── */}
+      {/* ── Content List ── */}
       <FlatList
         data={filteredAlternatives}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <View style={styles.cardWrapper}>
-            <AlternativeGemCard
-              gem={item}
-              isDualRadius={isDualRadius}
-              onPressCard={handlePressCard}
-              onPressReview={handlePressReview}
-            />
-          </View>
+          <AlternativeGemCard
+            gem={item}
+            isDualRadius={isDualRadius}
+            onPressCard={() => handlePressCard(item)}
+            onPressReview={() => handlePressReview(item)}
+          />
         )}
         ListHeaderComponent={ListHeader}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>🔍</Text>
-            <Text style={styles.emptyTitle}>Tidak Ada Alternatif Ditemukan</Text>
-            <Text style={styles.emptyText}>
-              Tidak ditemukan tempat wisata lain yang sesuai dalam radius 15 km. Coba ubah kategori
-              atau tujuan destinasi.
+            <Ionicons name="trail-sign-outline" size={48} color={colors.muted} />
+            <Text style={styles.emptyTitle}>Belum Ada Alternatif Terdekat</Text>
+            <Text style={styles.emptyDesc}>
+              Tidak ditemukan tempat wisata serupa dalam radius 15 km dari rute ini.
             </Text>
           </View>
         }
@@ -350,29 +417,31 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
         showsVerticalScrollIndicator={false}
       />
 
-      {/* Modal Detail Tempat */}
+      {/* ── Modal Detail Destinasi ── */}
       <DestinationDetailModal
-        visible={detailModalVisible}
         gem={selectedGem}
+        visible={detailModalVisible}
         onClose={() => setDetailModalVisible(false)}
-        onSelectAsDestination={(gem) => {
-          if (onSwitchDestination) {
-            onSwitchDestination(gem);
-          }
-        }}
-        onWriteReview={handlePressReview}
+        onSelectAsDestination={
+          onSwitchDestination
+            ? (gem: AlternativeDestination) => {
+                setDetailModalVisible(false);
+                onSwitchDestination(gem);
+              }
+            : undefined
+        }
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1, backgroundColor: colors.mist },
   navBar: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.ink,
-    paddingTop: Platform.OS === 'android' ? 44 : 54,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 8 : 44,
     paddingBottom: 14,
     paddingHorizontal: 16,
     gap: 12,
@@ -403,7 +472,13 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   originMarker: { backgroundColor: '#2563EB' },
+  stopMarker: { backgroundColor: colors.sea },
   destMarker: { backgroundColor: '#DC2626' },
+  stopNumberText: {
+    color: '#FFFFFF',
+    fontFamily: fonts.extraBold,
+    fontSize: 12,
+  },
   gemMarker: {
     width: 24,
     height: 24,
@@ -434,7 +509,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
   },
   radiusStatusBox: {
-    backgroundColor: colors.paper,
+    backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
     marginBottom: 12,
     padding: 12,
@@ -442,34 +517,85 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
   },
-  radiusStatusHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  radiusStatusTitle: { fontFamily: fonts.bold, fontSize: 13, color: colors.ink },
-  radiusStatusDesc: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, lineHeight: 16 },
+  radiusStatusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  radiusStatusTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 13,
+    color: colors.ink,
+  },
+  radiusStatusDesc: {
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    color: colors.muted,
+    lineHeight: 16,
+  },
   filterTabs: {
     flexDirection: 'row',
-    gap: 8,
     marginHorizontal: 16,
     marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 4,
   },
   filterTab: {
     flex: 1,
     paddingVertical: 8,
     alignItems: 'center',
     borderRadius: 8,
-    backgroundColor: colors.mist,
-    borderWidth: 1,
-    borderColor: colors.line,
   },
-  filterTabActive: { backgroundColor: colors.sea, borderColor: colors.sea },
-  filterTabText: { fontFamily: fonts.medium, fontSize: 11, color: colors.ink },
-  filterTabTextActive: { color: '#FFFFFF', fontFamily: fonts.bold },
-  listTitleWrap: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6 },
-  listTitle: { fontFamily: fonts.extraBold, fontSize: 18, color: colors.ink },
-  listSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
-  listContent: { paddingBottom: 36 },
-  cardWrapper: { paddingHorizontal: 16 },
-  emptyContainer: { padding: 40, alignItems: 'center' },
-  emptyIcon: { fontSize: 44, marginBottom: 12 },
-  emptyTitle: { fontFamily: fonts.bold, fontSize: 16, color: colors.ink, marginBottom: 6 },
-  emptyText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, textAlign: 'center', lineHeight: 18 },
+  filterTabActive: { backgroundColor: colors.sea },
+  filterTabText: {
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    color: colors.muted,
+  },
+  filterTabTextActive: {
+    fontFamily: fonts.bold,
+    color: '#FFFFFF',
+  },
+  listTitleWrap: {
+    paddingHorizontal: 16,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  listTitle: {
+    fontFamily: fonts.extraBold,
+    fontSize: 16,
+    color: colors.ink,
+  },
+  listSub: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    color: colors.muted,
+    marginTop: 2,
+  },
+  listContent: { paddingBottom: 32 },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 16,
+    color: colors.ink,
+    marginTop: 12,
+  },
+  emptyDesc: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.muted,
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18,
+  },
 });
