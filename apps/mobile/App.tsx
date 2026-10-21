@@ -1,85 +1,156 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ActivityIndicator, FlatList, Alert } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
 import { useFonts } from 'expo-font';
-import { PlusJakartaSans_400Regular, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
-import { HiddenGemCard } from './src/components/HiddenGemCard';
-
-// Tipe data lokal agar tidak perlu setting alias monorepo di Expo
-type HiddenGem = {
-  id: string;
-  name: string;
-  categoryName: string;
-  coverPhotoUrl: string | null;
-  latitude: number;
-  longitude: number;
-  distanceKm: number;
-  nearestCenter: 'ORIGIN' | 'DESTINATION';
-  reviewCount: number;
-  ratings: {
-    beauty: number | null;
-    access: number | null;
-    facilities: number | null;
-  };
-  rewardPoints: number;
-  firstReviewBonusPoints: number;
-};
+import {
+  PlusJakartaSans_400Regular,
+  PlusJakartaSans_500Medium,
+  PlusJakartaSans_600SemiBold,
+  PlusJakartaSans_700Bold,
+  PlusJakartaSans_800ExtraBold,
+} from '@expo-google-fonts/plus-jakarta-sans';
+import { colors, fonts } from './src/theme';
+import type { AppScreen, AlternativeDestination, RecommendationResponse } from './src/types';
+import HomeScreen from './src/screens/HomeScreen';
+import GemListScreen from './src/screens/GemListScreen';
+import ReviewScreen from './src/screens/ReviewScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
+import { getRecommendations } from './src/services/recommenderService';
 
 export default function App() {
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_400Regular,
+    PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
     PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold,
   });
-  
-  const [gems, setGems] = useState<HiddenGem[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // GANTI "192.168.X.X" DENGAN IP ADDRESS WIFI LAPTOPMU
-    const API_URL = 'http://10.226.222.70:3000/recommendations/hidden-gems?originLat=-8.7184&originLng=115.1686&destLat=-8.5069&destLng=115.2624&categoryId=3';
-    
-    fetch(API_URL)
-      .then((res) => res.json())
-      .then((data) => {
-        // Menangkap array "gems" dari respons API yang kamu tes di CMD tadi
-        setGems(data.gems || []);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error("Gagal mengambil data:", err);
-        setLoading(false);
-      });
+  // ── State Navigasi Antar Layar ──
+  const [currentScreen, setCurrentScreen] = useState<AppScreen>({ name: 'Home' });
+
+  // ── State Gamifikasi Poin & Lencana ──
+  const [totalPoints, setTotalPoints] = useState<number>(180);
+  const [hiddenGemReviews, setHiddenGemReviews] = useState<number>(3);
+
+  // ── Handler Ganti Screen ──
+  const handleNavigate = useCallback((screen: AppScreen) => {
+    setCurrentScreen(screen);
   }, []);
 
-  if (!fontsLoaded || loading) {
+  // ── Handler Setelah Submit Ulasan ──
+  const handleReviewSubmitted = useCallback((earnedPoints: number) => {
+    setTotalPoints((prev) => prev + earnedPoints);
+    setHiddenGemReviews((prev) => prev + 1);
+  }, []);
+
+  // ── Handler Beralih Destinasi ke Alternatif yang Dipilih ──
+  const handleSwitchDestination = useCallback(
+    async (gem: AlternativeDestination) => {
+      if (currentScreen.name === 'GemList') {
+        const prevParams = currentScreen.params;
+        try {
+          const newResponse = await getRecommendations(
+            prevParams.origin,
+            {
+              lat: gem.lat,
+              lng: gem.lng,
+              name: gem.name,
+              destinationObj: gem,
+            }
+          );
+          setCurrentScreen({
+            name: 'GemList',
+            params: newResponse,
+          });
+        } catch (err) {
+          console.error('Failed to recalculate with new destination:', err);
+        }
+      }
+    },
+    [currentScreen]
+  );
+
+  // Loading Screen saat memuat font
+  if (!fontsLoaded) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#0000ff" />
+      <View style={styles.loadingContainer}>
+        <View style={styles.brandBadge}>
+          <Text style={styles.brandIcon}>🧭</Text>
+        </View>
+        <Text style={styles.brandName}>Lokayana AI</Text>
+        <Text style={styles.brandSub}>Menyiapkan peta & kecerdasan navigasi Bali…</Text>
+        <ActivityIndicator size="large" color={colors.sea} style={{ marginTop: 20 }} />
       </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Rekomendasi Hidden Gem</Text>
-      <FlatList
-        data={gems}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <HiddenGemCard
-            gem={item}
-            onPressCard={(gem) => Alert.alert('Detail', `Membuka detail: ${gem.name}`)}
-            onPressReview={(gem) => Alert.alert('Tulis Ulasan', `Membuka formulir ulasan untuk: ${gem.name}`)}
-          />
-        )}
-        contentContainerStyle={styles.list}
-      />
-    </View>
-  );
+  // ── Render Layar Aktif ──
+  switch (currentScreen.name) {
+    case 'Home':
+      return <HomeScreen onNavigate={handleNavigate} />;
+
+    case 'GemList':
+      return (
+        <GemListScreen
+          params={currentScreen.params}
+          onNavigate={handleNavigate}
+          onSwitchDestination={handleSwitchDestination}
+        />
+      );
+
+    case 'Review':
+      return (
+        <ReviewScreen
+          params={currentScreen.params}
+          onNavigate={handleNavigate}
+          onReviewSubmitted={handleReviewSubmitted}
+        />
+      );
+
+    case 'Profile':
+      return (
+        <ProfileScreen
+          totalPoints={totalPoints}
+          hiddenGemReviews={hiddenGemReviews}
+          onNavigate={handleNavigate}
+        />
+      );
+
+    default:
+      return <HomeScreen onNavigate={handleNavigate} />;
+  }
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F7FA', paddingTop: 60 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  title: { fontSize: 22, fontFamily: 'PlusJakartaSans_700Bold', marginHorizontal: 16, marginBottom: 16, color: '#1A1A1A' },
-  list: { paddingHorizontal: 16, paddingBottom: 20 },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: colors.ink,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  brandBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  brandIcon: {
+    fontSize: 32,
+  },
+  brandName: {
+    fontSize: 26,
+    color: '#FFFFFF',
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  brandSub: {
+    fontSize: 13,
+    color: colors.mist,
+    marginTop: 6,
+    textAlign: 'center',
+  },
 });

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HiddenGemCard — kartu rekomendasi tempat wisata yang belum banyak diulas.
  *
  * Arah desain
@@ -20,9 +20,10 @@ import { colors, fonts } from '../theme';
 // Re-export agar kompatibel dengan kode lama yang mungkin mengimport dari sini
 export type { HiddenGem as HiddenGemDto } from '../types';
 
-const CENTER_LABEL: Record<'ORIGIN' | 'DESTINATION', string> = {
+const CENTER_LABEL: Record<'ORIGIN' | 'DESTINATION' | 'MERGED', string> = {
   ORIGIN: 'dari titik awal',
   DESTINATION: 'dari tujuan',
+  MERGED: 'dari area',
 };
 
 // Format Indonesia: koma sebagai pemisah desimal
@@ -58,11 +59,14 @@ function RatingRow({ label, value }: { label: string; value: number | null }) {
 }
 
 function HiddenGemCardBase({ gem, onPressCard, onPressReview }: HiddenGemCardProps) {
-  const { ratings } = gem;
+  const ratings = gem.ratings;
   const hasRatings =
-    ratings.beauty !== null || ratings.access !== null || ratings.facilities !== null;
+    ratings &&
+    (ratings.beauty !== null || ratings.access !== null || ratings.facilities !== null);
 
   const reviewText = gem.reviewCount === 0 ? 'Belum ada ulasan' : `Baru ${gem.reviewCount} ulasan`;
+  const distance = gem.distanceKm ?? gem.distanceFromHubKm ?? 0;
+  const categoryName = gem.categoryName ?? gem.category;
 
   return (
     <View style={styles.card}>
@@ -73,8 +77,8 @@ function HiddenGemCardBase({ gem, onPressCard, onPressReview }: HiddenGemCardPro
         accessibilityLabel={`Lihat detail ${gem.name}`}
       >
         <View style={styles.photoWrap}>
-          {gem.coverPhotoUrl ? (
-            <Image source={{ uri: gem.coverPhotoUrl }} style={styles.photo} resizeMode="cover" />
+          {gem.coverPhotoUrl ?? gem.imageUrl ? (
+            <Image source={{ uri: gem.coverPhotoUrl ?? gem.imageUrl! }} style={styles.photo} resizeMode="cover" />
           ) : (
             <View style={[styles.photo, styles.photoFallback]}>
               <Ionicons name="compass-outline" size={40} color={colors.sea} />
@@ -94,12 +98,12 @@ function HiddenGemCardBase({ gem, onPressCard, onPressReview }: HiddenGemCardPro
 
           <View style={styles.metaRow}>
             <Text style={styles.category} numberOfLines={1}>
-              {gem.categoryName}
+              {categoryName}
             </Text>
             <View style={styles.metaItem}>
               <Ionicons name="location-outline" size={14} color={colors.muted} />
               <Text style={styles.metaText}>
-                {formatDistance(gem.distanceKm)} {CENTER_LABEL[gem.nearestCenter]}
+                {formatDistance(distance)} {CENTER_LABEL[gem.nearestCenter]}
               </Text>
             </View>
           </View>
@@ -110,7 +114,7 @@ function HiddenGemCardBase({ gem, onPressCard, onPressReview }: HiddenGemCardPro
           </View>
 
           <View style={styles.ratings}>
-            {hasRatings ? (
+            {hasRatings && ratings ? (
               <>
                 <RatingRow label="Keindahan" value={ratings.beauty} />
                 <RatingRow label="Akses Jalan" value={ratings.access} />

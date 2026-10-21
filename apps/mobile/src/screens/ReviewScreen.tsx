@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ReviewScreen — Formulir ulasan hidden gem.
  *
  * Komponen penilaian: Keindahan, Akses Jalan, Fasilitas (masing-masing 1-5 bintang).
@@ -97,7 +97,7 @@ export default function ReviewScreen({ params, onNavigate, onReviewSubmitted }: 
 
   const handleDone = () => {
     setSuccessVisible(false);
-    onNavigate({ name: 'GemList', params: undefined as any });
+    onNavigate({ name: 'Home' });
   };
 
   // ─────────────────────────────────────────────────────────────────────
@@ -123,13 +123,13 @@ export default function ReviewScreen({ params, onNavigate, onReviewSubmitted }: 
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.gemName} numberOfLines={2}>{gem.name}</Text>
-            <Text style={styles.gemCategory}>{gem.categoryName}</Text>
+            <Text style={styles.gemCategory}>{gem.categoryName ?? gem.category}</Text>
             <View style={styles.gemMeta}>
               <Ionicons name="location-outline" size={13} color={colors.muted} />
               <Text style={styles.gemMetaText}>
-                {gem.distanceKm < 1
-                  ? `${Math.round(gem.distanceKm * 1000)} m`
-                  : `${gem.distanceKm.toFixed(1).replace('.', ',')} km`}
+                {(gem.distanceKm ?? gem.distanceFromHubKm ?? 0) < 1
+                  ? `${Math.round((gem.distanceKm ?? gem.distanceFromHubKm ?? 0) * 1000)} m`
+                  : `${(gem.distanceKm ?? gem.distanceFromHubKm ?? 0).toFixed(1).replace('.', ',')} km`}
                 {' '}dari {gem.nearestCenter === 'ORIGIN' ? 'titik awal' : 'destinasi'}
               </Text>
             </View>

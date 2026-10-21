@@ -1,4 +1,4 @@
-﻿export type SearchCenterLabel = 'ORIGIN' | 'DESTINATION';
+export type SearchCenterLabel = 'ORIGIN' | 'DESTINATION' | 'MERGED';
 
 export interface Coordinate {
   lat: number;
@@ -9,6 +9,8 @@ export interface Category {
   id: number;
   name: string;
   icon: string;
+  count?: number;
+  description?: string;
 }
 
 export interface SearchArea {
@@ -16,21 +18,35 @@ export interface SearchArea {
   latitude: number;
   longitude: number;
   radiusKm: number;
+  title: string;
+  description: string;
 }
 
-export interface HiddenGem {
+export interface Destination {
   id: string;
   name: string;
-  categoryName: string;
-  coverPhotoUrl: string | null;
-  latitude: number;
-  longitude: number;
-  /** Jarak ke pusat area pencarian terdekat (km). */
-  distanceKm: number;
-  nearestCenter: SearchCenterLabel;
-  /** Total ulasan (di aplikasi + sumber eksternal). */
+  category: string;
+  broadCategory: string;
+  district: string;
+  city: string;
+  rating: number;
   reviewCount: number;
-  ratings: {
+  lat: number;
+  lng: number;
+  mapLink: string;
+  imageUrl: string | null;
+}
+
+export interface AlternativeDestination extends Destination {
+  similarityScore: number; // 0 - 100%
+  similarityReason: string;
+  distanceFromHubKm: number;
+  distanceKm?: number; // Kompatibilitas
+  categoryName?: string; // Kompatibilitas
+  coverPhotoUrl?: string | null; // Kompatibilitas
+  nearestCenter: SearchCenterLabel;
+  estimatedTravelMinutes?: number;
+  ratings?: {
     beauty: number | null;
     access: number | null;
     facilities: number | null;
@@ -39,11 +55,26 @@ export interface HiddenGem {
   firstReviewBonusPoints: number;
 }
 
-export interface HiddenGemsResponse {
-  /** Jarak garis lurus titik awal -> tujuan (km). */
-  originToDestinationKm: number;
+export type HiddenGem = AlternativeDestination;
+
+export interface RouteInfo {
+  straightDistanceKm: number;
+  roadDistanceKm: number;
+  carDurationMinutes: number;
+  motorDurationMinutes: number;
+  fastestMode: 'MOTOR' | 'CAR';
+  polylineCoords: Coordinate[];
+  summaryNote: string;
+}
+
+export interface RecommendationResponse {
+  origin: Coordinate & { name: string };
+  destination: Coordinate & { name: string; destinationObj?: Destination | null };
+  straightDistanceKm: number;
+  isDualRadius: boolean;
   searchAreas: SearchArea[];
-  gems: HiddenGem[];
+  route: RouteInfo;
+  alternatives: AlternativeDestination[];
 }
 
 export interface Badge {
@@ -58,13 +89,7 @@ export type AppScreen =
   | { name: 'Home' }
   | {
       name: 'GemList';
-      params: {
-        response: HiddenGemsResponse;
-        origin: Coordinate;
-        originName: string;
-        destination: Coordinate;
-        destinationName: string;
-      };
+      params: RecommendationResponse;
     }
-  | { name: 'Review'; params: { gem: HiddenGem } }
+  | { name: 'Review'; params: { gem: AlternativeDestination } }
   | { name: 'Profile' };

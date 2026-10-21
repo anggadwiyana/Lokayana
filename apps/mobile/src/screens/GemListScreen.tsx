@@ -1,170 +1,335 @@
-﻿/**
- * GemListScreen — Menampilkan peta area pencarian + daftar hidden gem.
+/**
+ * GemListScreen — Hasil Navigasi Rute Tercepat & Rekomendasi Cerdas Lokayana AI
  *
- * Peta:
- *  - Marker biru   = titik awal
- *  - Marker merah  = destinasi
- *  - Lingkaran teal = area pencarian 15 km (1 atau 2)
- *  - Marker kunyit = setiap hidden gem
+ * Fitur:
+ *  1. Peta Interaktif:
+ *     - Marker Titik Awal (Biru)
+ *     - Marker Destinasi Utama (Merah)
+ *     - Polyline Rute Jalan (OSRM Driving Route)
+ *     - Lingkaran Radius 15 km:
+ *       * Jika jarak > 15 km: 2 Lingkaran (Origin 15 km & Destination 15 km)
+ *       * Jika jarak <= 15 km: 1 Lingkaran (15 km)
+ *     - Marker Tempat Alternatif Terkait
+ *  2. Kartu Rute Tercepat (Komparasi Motor vs Mobil)
+ *  3. Filter Tab Alternatif (Semua / Dekat Destinasi / Dekat Titik Awal)
+ *  4. Daftar Rekomendasi Tempat Serupa dengan Skor AI
  */
-import React, { useRef } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Platform, StatusBar,
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Platform,
+  StatusBar,
 } from 'react-native';
-import MapView, { Marker, Circle } from 'react-native-maps';
+import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import { HiddenGemCard } from '../components/HiddenGemCard';
 import { colors, fonts } from '../theme';
-import type { AppScreen, HiddenGemsResponse, Coordinate, HiddenGem } from '../types';
+import type { AppScreen, RecommendationResponse, AlternativeDestination, Coordinate } from '../types';
+import FastestRouteCard from '../components/FastestRouteCard';
+import { AlternativeGemCard } from '../components/AlternativeGemCard';
+import DestinationDetailModal from '../components/DestinationDetailModal';
 
 interface Props {
-  params: {
-    response: HiddenGemsResponse;
-    origin: Coordinate;
-    originName: string;
-    destination: Coordinate;
-    destinationName: string;
-  };
+  params: RecommendationResponse;
   onNavigate: (screen: AppScreen) => void;
+  onSwitchDestination?: (gem: AlternativeDestination) => void;
 }
 
-/** Hitung region MapView agar semua marker terlihat. */
-function calcRegion(origin: Coordinate, destination: Coordinate, radiusKm: number) {
+/** Hitung wilayah MapView agar seluruh titik dan rute terlihat proporsional */
+function calcMapRegion(origin: Coordinate, destination: Coordinate) {
   const lats = [origin.lat, destination.lat];
   const lngs = [origin.lng, destination.lng];
-  const minLat = Math.min(...lats) - radiusKm / 111;
-  const maxLat = Math.max(...lats) + radiusKm / 111;
-  const minLng = Math.min(...lngs) - radiusKm / (111 * Math.cos((origin.lat * Math.PI) / 180));
-  const maxLng = Math.max(...lngs) + radiusKm / (111 * Math.cos((origin.lat * Math.PI) / 180));
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+
+  const deltaLat = Math.max(maxLat - minLat, 0.08) * 1.5;
+  const deltaLng = Math.max(maxLng - minLng, 0.08) * 1.5;
+
   return {
     latitude: (minLat + maxLat) / 2,
     longitude: (minLng + maxLng) / 2,
-    latitudeDelta: Math.max(maxLat - minLat, 0.05) * 1.2,
-    longitudeDelta: Math.max(maxLng - minLng, 0.05) * 1.2,
+    latitudeDelta: Math.min(deltaLat, 1.2),
+    longitudeDelta: Math.min(deltaLng, 1.2),
   };
 }
 
-export default function GemListScreen({ params, onNavigate }: Props) {
-  const { response, origin, originName, destination, destinationName } = params;
-  const { gems, searchAreas, originToDestinationKm } = response;
+export default function GemListScreen({ params, onNavigate, onSwitchDestination }: Props) {
+  const { origin, destination, straightDistanceKm, isDualRadius, searchAreas, route, alternatives } =
+    params;
+
   const mapRef = useRef<MapView>(null);
+  const [selectedGem, setSelectedGem] = useState<AlternativeDestination | null>(null);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [activeFilterTab, setActiveFilterTab] = useState<'ALL' | 'DESTINATION' | 'ORIGIN'>('ALL');
 
-  const region = calcRegion(origin, destination, searchAreas[0]?.radiusKm ?? 15);
+  const region = useMemo(() => calcMapRegion(origin, destination), [origin, destination]);
 
-  const handlePressReview = (gem: HiddenGem) => {
+  // Filter alternatif berdasarkan tab yang dipilih
+  const filteredAlternatives = useMemo(() => {
+    if (activeFilterTab === 'DESTINATION') {
+      return alternatives.filter((a) => a.nearestCenter === 'DESTINATION');
+    }
+    if (activeFilterTab === 'ORIGIN') {
+      return alternatives.filter((a) => a.nearestCenter === 'ORIGIN');
+    }
+    return alternatives;
+  }, [alternatives, activeFilterTab]);
+
+  const destCount = useMemo(
+    () => alternatives.filter((a) => a.nearestCenter === 'DESTINATION').length,
+    [alternatives]
+  );
+  const originCount = useMemo(
+    () => alternatives.filter((a) => a.nearestCenter === 'ORIGIN').length,
+    [alternatives]
+  );
+
+  const handlePressCard = (gem: AlternativeDestination) => {
+    setSelectedGem(gem);
+    setDetailModalVisible(true);
+    // Animate map to the selected gem
+    mapRef.current?.animateToRegion(
+      {
+        latitude: gem.lat,
+        longitude: gem.lng,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04,
+      },
+      400
+    );
+  };
+
+  const handlePressReview = (gem: AlternativeDestination) => {
     onNavigate({ name: 'Review', params: { gem } });
   };
 
-  const handlePressCard = (gem: HiddenGem) => {
-    // Zoom peta ke gem ini
-    mapRef.current?.animateToRegion({
-      latitude: gem.latitude,
-      longitude: gem.longitude,
-      latitudeDelta: 0.05,
-      longitudeDelta: 0.05,
-    }, 400);
+  const handleResetMap = () => {
+    mapRef.current?.animateToRegion(region, 400);
   };
 
-  // ── ListHeaderComponent (peta + stats) ──────────────────────────────
+  // ── ListHeaderComponent ──────────────────────────────────────────────
   const ListHeader = (
-    <View>
-      {/* ── Navigasi ── */}
-      <View style={styles.navBar}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => onNavigate({ name: 'Home' })}>
-          <Ionicons name="arrow-back" size={22} color={colors.white} />
-        </TouchableOpacity>
-        <View style={styles.navTitle}>
-          <Text style={styles.navTitleText} numberOfLines={1}>
-            {originName} → {destinationName}
-          </Text>
-        </View>
-        <TouchableOpacity style={styles.profileBtn} onPress={() => onNavigate({ name: 'Profile' })}>
-          <Ionicons name="person-circle-outline" size={28} color={colors.turmeric} />
-        </TouchableOpacity>
-      </View>
+    <View style={styles.headerContainer}>
+      {/* ── Peta Interaktif ── */}
+      <View style={styles.mapWrap}>
+        <MapView
+          ref={mapRef}
+          style={styles.map}
+          initialRegion={region}
+          showsUserLocation
+          showsCompass
+        >
+          {/* Polyline Rute Tercepat OSRM */}
+          {route.polylineCoords && route.polylineCoords.length > 0 && (
+            <Polyline
+              coordinates={route.polylineCoords.map((c) => ({
+                latitude: c.lat,
+                longitude: c.lng,
+              }))}
+              strokeColor={colors.sea}
+              strokeWidth={5}
+            />
+          )}
 
-      {/* ── Peta ── */}
-      <MapView ref={mapRef} style={styles.map} initialRegion={region} showsUserLocation>
-        {/* Marker titik awal */}
-        <Marker coordinate={{ latitude: origin.lat, longitude: origin.lng }} title="Titik Awal" description={originName}>
-          <View style={[styles.marker, { backgroundColor: '#3B82F6' }]}>
-            <Ionicons name="navigate" size={14} color="#fff" />
-          </View>
-        </Marker>
+          {/* Lingkaran Radius 15 km */}
+          {searchAreas.map((area) => {
+            const isOriginArea = area.label === 'ORIGIN';
+            const strokeColor = isOriginArea ? 'rgba(37, 99, 235, 0.7)' : 'rgba(27, 107, 102, 0.75)';
+            const fillColor = isOriginArea ? 'rgba(37, 99, 235, 0.12)' : 'rgba(27, 107, 102, 0.13)';
 
-        {/* Marker destinasi */}
-        <Marker coordinate={{ latitude: destination.lat, longitude: destination.lng }} title="Destinasi" description={destinationName}>
-          <View style={[styles.marker, { backgroundColor: '#EF4444' }]}>
-            <Ionicons name="flag" size={14} color="#fff" />
-          </View>
-        </Marker>
+            return (
+              <Circle
+                key={area.label}
+                center={{ latitude: area.latitude, longitude: area.longitude }}
+                radius={area.radiusKm * 1000} // 15,000 meter
+                fillColor={fillColor}
+                strokeColor={strokeColor}
+                strokeWidth={2}
+              />
+            );
+          })}
 
-        {/* Lingkaran area pencarian */}
-        {searchAreas.map((area) => (
-          <Circle
-            key={area.label}
-            center={{ latitude: area.latitude, longitude: area.longitude }}
-            radius={area.radiusKm * 1000}
-            fillColor="rgba(27, 107, 102, 0.12)"
-            strokeColor="rgba(27, 107, 102, 0.6)"
-            strokeWidth={2}
-          />
-        ))}
-
-        {/* Marker setiap gem */}
-        {gems.map((gem) => (
+          {/* Marker Titik Awal */}
           <Marker
-            key={gem.id}
-            coordinate={{ latitude: gem.latitude, longitude: gem.longitude }}
-            title={gem.name}
-            description={`${gem.reviewCount} ulasan • ${gem.rewardPoints} poin`}
+            coordinate={{ latitude: origin.lat, longitude: origin.lng }}
+            title="Titik Awal"
+            description={origin.name}
           >
-            <View style={styles.gemMarker}>
-              <Ionicons name="diamond" size={12} color={colors.ink} />
+            <View style={[styles.marker, styles.originMarker]}>
+              <Ionicons name="navigate" size={14} color="#FFFFFF" />
             </View>
           </Marker>
-        ))}
-      </MapView>
 
-      {/* ── Stats bar ── */}
-      <View style={styles.statsBar}>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{gems.length}</Text>
-          <Text style={styles.statLabel}>Hidden Gem</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{originToDestinationKm.toFixed(1)} km</Text>
-          <Text style={styles.statLabel}>Jarak Perjalanan</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{searchAreas.length}</Text>
-          <Text style={styles.statLabel}>Area Pencarian</Text>
-        </View>
+          {/* Marker Destinasi Utama */}
+          <Marker
+            coordinate={{ latitude: destination.lat, longitude: destination.lng }}
+            title="Destinasi Tujuan"
+            description={destination.name}
+          >
+            <View style={[styles.marker, styles.destMarker]}>
+              <Ionicons name="flag" size={14} color="#FFFFFF" />
+            </View>
+          </Marker>
+
+          {/* Marker Tempat Alternatif Serupa */}
+          {filteredAlternatives.map((gem) => {
+            const isOriginCluster = gem.nearestCenter === 'ORIGIN';
+            return (
+              <Marker
+                key={gem.id}
+                coordinate={{ latitude: gem.lat, longitude: gem.lng }}
+                title={`${gem.name} (${gem.similarityScore}% Serupa)`}
+                description={`${gem.category} • ${gem.distanceFromHubKm} km dari hub`}
+                onPress={() => handlePressCard(gem)}
+              >
+                <View
+                  style={[
+                    styles.gemMarker,
+                    isOriginCluster ? styles.gemMarkerOrigin : styles.gemMarkerDest,
+                  ]}
+                >
+                  <Ionicons name="sparkles" size={11} color={colors.ink} />
+                </View>
+              </Marker>
+            );
+          })}
+        </MapView>
+
+        {/* Floating Reset View Button */}
+        <TouchableOpacity
+          style={styles.resetMapBtn}
+          onPress={handleResetMap}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="scan-outline" size={18} color={colors.ink} />
+        </TouchableOpacity>
       </View>
 
-      {/* ── Judul list ── */}
-      {gems.length > 0 ? (
-        <View style={styles.listHeader}>
-          <Text style={styles.listTitle}>Rekomendasi Untukmu</Text>
-          <Text style={styles.listSub}>Tempat dengan ulasan sedikit — jadilah yang pertama mengulasnya!</Text>
+      {/* ── Kartu Rute Tercepat (Komparasi Motor vs Mobil) ── */}
+      <FastestRouteCard route={route} origin={origin} destination={destination} />
+
+      {/* ── Radius Mode Status Card ── */}
+      <View style={styles.radiusStatusBox}>
+        <View style={styles.radiusStatusHeader}>
+          <Ionicons
+            name={isDualRadius ? 'git-network-outline' : 'radio-outline'}
+            size={18}
+            color={colors.sea}
+          />
+          <Text style={styles.radiusStatusTitle}>
+            {isDualRadius
+              ? `Mode 2 Radius: Jarak ${straightDistanceKm} km (> 15 km)`
+              : `Mode 1 Radius: Jarak ${straightDistanceKm} km (≤ 15 km)`}
+          </Text>
         </View>
-      ) : null}
+        <Text style={styles.radiusStatusDesc}>
+          {isDualRadius
+            ? `Karena jarak di atas 15 km, sistem mencari alternatif di 2 radius 15 km (dekat Titik Awal dan dekat Destinasi Tujuan).`
+            : `Karena jarak di bawah 15 km, sistem menggabungkan pencarian dalam 1 radius 15 km di sekitar destinasi.`}
+        </Text>
+      </View>
+
+      {/* ── Tab Filter (jika 2 Radius) ── */}
+      {isDualRadius && (
+        <View style={styles.filterTabs}>
+          <TouchableOpacity
+            style={[styles.filterTab, activeFilterTab === 'ALL' && styles.filterTabActive]}
+            onPress={() => setActiveFilterTab('ALL')}
+          >
+            <Text
+              style={[
+                styles.filterTabText,
+                activeFilterTab === 'ALL' && styles.filterTabTextActive,
+              ]}
+            >
+              Semua ({alternatives.length})
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterTab,
+              activeFilterTab === 'DESTINATION' && styles.filterTabActive,
+            ]}
+            onPress={() => setActiveFilterTab('DESTINATION')}
+          >
+            <Text
+              style={[
+                styles.filterTabText,
+                activeFilterTab === 'DESTINATION' && styles.filterTabTextActive,
+              ]}
+            >
+              Dekat Destinasi ({destCount})
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.filterTab, activeFilterTab === 'ORIGIN' && styles.filterTabActive]}
+            onPress={() => setActiveFilterTab('ORIGIN')}
+          >
+            <Text
+              style={[
+                styles.filterTabText,
+                activeFilterTab === 'ORIGIN' && styles.filterTabTextActive,
+              ]}
+            >
+              Dekat Titik Awal ({originCount})
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── Section Title ── */}
+      <View style={styles.listTitleWrap}>
+        <Text style={styles.listTitle}>Rekomendasi Alternatif Serupa</Text>
+        <Text style={styles.listSub}>
+          Disaring berdasarkan kesamaan vibe, rating, dan berada dalam radius 15 km
+        </Text>
+      </View>
     </View>
   );
 
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={colors.ink} />
+
+      {/* ── Top Bar ── */}
+      <View style={styles.navBar}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={() => onNavigate({ name: 'Home' })}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
+        </TouchableOpacity>
+        <View style={styles.navTitleWrap}>
+          <Text style={styles.navRoute} numberOfLines={1}>
+            {origin.name} → {destination.name}
+          </Text>
+          <Text style={styles.navSub}>Rute & Rekomendasi Terkait</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.profileBtn}
+          onPress={() => onNavigate({ name: 'Profile' })}
+        >
+          <Ionicons name="person-circle-outline" size={28} color={colors.turmeric} />
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Main List ── */}
       <FlatList
-        data={gems}
+        data={filteredAlternatives}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <View style={styles.cardWrapper}>
-            <HiddenGemCard
+            <AlternativeGemCard
               gem={item}
+              isDualRadius={isDualRadius}
               onPressCard={handlePressCard}
               onPressReview={handlePressReview}
             />
@@ -172,17 +337,30 @@ export default function GemListScreen({ params, onNavigate }: Props) {
         )}
         ListHeaderComponent={ListHeader}
         ListEmptyComponent={
-          <View style={styles.empty}>
+          <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>🔍</Text>
-            <Text style={styles.emptyTitle}>Tidak Ada Hidden Gem</Text>
+            <Text style={styles.emptyTitle}>Tidak Ada Alternatif Ditemukan</Text>
             <Text style={styles.emptyText}>
-              Tidak ditemukan tempat dengan ulasan sedikit di kategori ini dalam radius 15 km.
-              Coba kategori atau destinasi lain.
+              Tidak ditemukan tempat wisata lain yang sesuai dalam radius 15 km. Coba ubah kategori
+              atau tujuan destinasi.
             </Text>
           </View>
         }
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+      />
+
+      {/* Modal Detail Tempat */}
+      <DestinationDetailModal
+        visible={detailModalVisible}
+        gem={selectedGem}
+        onClose={() => setDetailModalVisible(false)}
+        onSelectAsDestination={(gem) => {
+          if (onSwitchDestination) {
+            onSwitchDestination(gem);
+          }
+        }}
+        onWriteReview={handlePressReview}
       />
     </View>
   );
@@ -190,49 +368,108 @@ export default function GemListScreen({ params, onNavigate }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-
-  // Nav bar
   navBar: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: colors.ink, paddingTop: Platform.OS === 'android' ? 48 : 60,
-    paddingBottom: 16, paddingHorizontal: 16, gap: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.ink,
+    paddingTop: Platform.OS === 'android' ? 44 : 54,
+    paddingBottom: 14,
+    paddingHorizontal: 16,
+    gap: 12,
   },
-  backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
-  navTitle: { flex: 1 },
-  navTitleText: { fontFamily: fonts.bold, fontSize: 14, color: colors.mist },
-  profileBtn: {},
-
-  // Map
-  map: { width: '100%', height: 260 },
-
-  // Marker
-  marker: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navTitleWrap: { flex: 1 },
+  navRoute: { fontFamily: fonts.bold, fontSize: 14, color: '#FFFFFF' },
+  navSub: { fontFamily: fonts.regular, fontSize: 11, color: colors.mist, marginTop: 1 },
+  profileBtn: { padding: 4 },
+  headerContainer: { paddingBottom: 6 },
+  mapWrap: { width: '100%', height: 280, position: 'relative' },
+  map: { width: '100%', height: '100%' },
+  marker: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    elevation: 4,
+  },
+  originMarker: { backgroundColor: '#2563EB' },
+  destMarker: { backgroundColor: '#DC2626' },
   gemMarker: {
-    width: 26, height: 26, borderRadius: 13,
-    backgroundColor: colors.turmeric, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: colors.ink,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.turmeric,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.ink,
+    elevation: 3,
   },
-
-  // Stats bar
-  statsBar: {
-    flexDirection: 'row', backgroundColor: colors.paper, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: colors.line,
+  gemMarkerDest: { backgroundColor: colors.turmeric },
+  gemMarkerOrigin: { backgroundColor: '#60A5FA' },
+  resetMapBtn: {
+    position: 'absolute',
+    right: 14,
+    top: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
   },
-  statItem: { flex: 1, alignItems: 'center' },
-  statValue: { fontFamily: fonts.extraBold, fontSize: 18, color: colors.ink },
-  statLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted, marginTop: 2 },
-  statDivider: { width: 1, backgroundColor: colors.line },
-
-  // List
-  listHeader: { padding: 16, paddingBottom: 4 },
-  listTitle: { fontFamily: fonts.extraBold, fontSize: 20, color: colors.ink },
-  listSub: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 4, lineHeight: 18 },
-  listContent: { paddingBottom: 40 },
-  cardWrapper: { paddingHorizontal: 16, paddingTop: 12 },
-
-  // Empty state
-  empty: { padding: 40, alignItems: 'center' },
-  emptyIcon: { fontSize: 48, marginBottom: 16 },
-  emptyTitle: { fontFamily: fonts.bold, fontSize: 18, color: colors.ink, marginBottom: 8 },
-  emptyText: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, textAlign: 'center', lineHeight: 20 },
+  radiusStatusBox: {
+    backgroundColor: colors.paper,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  radiusStatusHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  radiusStatusTitle: { fontFamily: fonts.bold, fontSize: 13, color: colors.ink },
+  radiusStatusDesc: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, lineHeight: 16 },
+  filterTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+  },
+  filterTab: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+    backgroundColor: colors.mist,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  filterTabActive: { backgroundColor: colors.sea, borderColor: colors.sea },
+  filterTabText: { fontFamily: fonts.medium, fontSize: 11, color: colors.ink },
+  filterTabTextActive: { color: '#FFFFFF', fontFamily: fonts.bold },
+  listTitleWrap: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6 },
+  listTitle: { fontFamily: fonts.extraBold, fontSize: 18, color: colors.ink },
+  listSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
+  listContent: { paddingBottom: 36 },
+  cardWrapper: { paddingHorizontal: 16 },
+  emptyContainer: { padding: 40, alignItems: 'center' },
+  emptyIcon: { fontSize: 44, marginBottom: 12 },
+  emptyTitle: { fontFamily: fonts.bold, fontSize: 16, color: colors.ink, marginBottom: 6 },
+  emptyText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, textAlign: 'center', lineHeight: 18 },
 });
