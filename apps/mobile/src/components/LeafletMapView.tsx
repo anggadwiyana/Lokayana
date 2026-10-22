@@ -157,46 +157,15 @@ export default function LeafletMapView({
       attributionControl: false
     }).setView([-8.55, 115.2], 10);
 
-    // ── Layer 1: Esri World Street Map (dengan Retina High-DPI support) ──
-    var esriLayer = L.tileLayer(
+    // ── Tile Layer: Esri World Street Map (Sama persis dengan web Streamlit Lokayana) ──
+    L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
       {
         maxZoom: 19,
         detectRetina: true,
         attribution: 'Tiles &copy; Esri'
       }
-    );
-
-    // ── Layer 2: CartoDB Voyager HD @2x (Super Tajam di Layar HP) ──
-    var cartoLayer = L.tileLayer(
-      'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-      {
-        maxZoom: 19,
-        detectRetina: true,
-        attribution: '&copy; CartoDB'
-      }
-    );
-
-    // ── Layer 3: OpenStreetMap Standard ──
-    var osmLayer = L.tileLayer(
-      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-      {
-        maxZoom: 19,
-        detectRetina: true,
-        attribution: '&copy; OpenStreetMap'
-      }
-    );
-
-    // Aktifkan Esri sebagai layer utama
-    esriLayer.addTo(map);
-
-    // Tambahkan Layer Switcher (Pojok Kanan Atas)
-    var baseLayers = {
-      "Esri Street (Tajam)": esriLayer,
-      "CartoDB HD (Ultra Tajam)": cartoLayer,
-      "OpenStreetMap": osmLayer
-    };
-    L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
+    ).addTo(map);
 
     var isPicker = ${isPickerMode ? 'true' : 'false'};
     var origin = ${originJson};
@@ -341,11 +310,27 @@ export default function LeafletMapView({
       });
     }
 
-    // Fit Bounds jika ada titik
+    // ── Fit Bounds Cerdas (Mencegah over-zoom ke laut) ──
     if (allLatLngs.length > 1 && !isPicker) {
-      map.fitBounds(allLatLngs, { padding: [35, 35] });
+      var validCoords = allLatLngs.filter(function(pt) {
+        return pt && !isNaN(pt[0]) && !isNaN(pt[1]) && Math.abs(pt[0]) <= 90 && Math.abs(pt[1]) <= 180;
+      });
+      if (validCoords.length > 1) {
+        var bounds = L.latLngBounds(validCoords);
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, {
+            padding: [45, 45],
+            maxZoom: 13, // Batasi zoom maksimal di level 13 agar selalu melihat daratan pulau Bali secara proporsional
+            animate: false
+          });
+        }
+      } else if (validCoords.length === 1) {
+        map.setView(validCoords[0], 11);
+      }
     } else if (allLatLngs.length === 1 && !isPicker) {
-      map.setView(allLatLngs[0], 12);
+      map.setView(allLatLngs[0], 11);
+    } else if (!isPicker) {
+      map.setView([-8.55, 115.2], 10);
     }
   </script>
 </body>
