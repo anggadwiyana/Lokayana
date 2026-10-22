@@ -22,10 +22,10 @@ import {
   Platform,
   StatusBar,
 } from 'react-native';
-import MapView, { Marker, Circle, Polyline, UrlTile } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
+import LeafletMapView from '../components/LeafletMapView';
 import { colors, fonts } from '../theme';
-import type { AppScreen, RecommendationResponse, AlternativeDestination, Coordinate } from '../types';
+import type { AppScreen, RecommendationResponse, AlternativeDestination } from '../types';
 import FastestRouteCard from '../components/FastestRouteCard';
 import { AlternativeGemCard } from '../components/AlternativeGemCard';
 import DestinationDetailModal from '../components/DestinationDetailModal';
@@ -34,35 +34,6 @@ interface Props {
   params: RecommendationResponse;
   onNavigate: (screen: AppScreen) => void;
   onSwitchDestination?: (gem: AlternativeDestination) => void;
-}
-
-/** Hitung wilayah MapView agar seluruh titik dan rute terlihat proporsional */
-function calcMapRegion(points: Coordinate[]) {
-  if (points.length === 0) {
-    return {
-      latitude: -8.55,
-      longitude: 115.2,
-      latitudeDelta: 0.5,
-      longitudeDelta: 0.5,
-    };
-  }
-
-  const lats = points.map((p) => p.lat);
-  const lngs = points.map((p) => p.lng);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-
-  const deltaLat = Math.max(maxLat - minLat, 0.08) * 1.5;
-  const deltaLng = Math.max(maxLng - minLng, 0.08) * 1.5;
-
-  return {
-    latitude: (minLat + maxLat) / 2,
-    longitude: (minLng + maxLng) / 2,
-    latitudeDelta: Math.min(deltaLat, 1.2),
-    longitudeDelta: Math.min(deltaLng, 1.2),
-  };
 }
 
 export default function GemListScreen({ params, onNavigate, onSwitchDestination }: Props) {
@@ -81,17 +52,9 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
   const effectiveStops = orderedDestinations ?? stops ?? [];
   const isMultiStop = effectiveStops.length > 1;
 
-  const mapRef = useRef<MapView>(null);
   const [selectedGem, setSelectedGem] = useState<AlternativeDestination | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [activeFilterTab, setActiveFilterTab] = useState<'ALL' | 'DESTINATION' | 'ORIGIN'>('ALL');
-
-  const allKeyPoints = useMemo(
-    () => [origin, ...(effectiveStops.length > 0 ? effectiveStops : [destination])],
-    [origin, effectiveStops, destination]
-  );
-
-  const region = useMemo(() => calcMapRegion(allKeyPoints), [allKeyPoints]);
 
   // Filter alternatif berdasarkan tab yang dipilih
   const filteredAlternatives = useMemo(() => {
@@ -116,157 +79,27 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
   const handlePressCard = (gem: AlternativeDestination) => {
     setSelectedGem(gem);
     setDetailModalVisible(true);
-    mapRef.current?.animateToRegion(
-      {
-        latitude: gem.lat,
-        longitude: gem.lng,
-        latitudeDelta: 0.04,
-        longitudeDelta: 0.04,
-      },
-      400
-    );
   };
 
   const handlePressReview = (gem: AlternativeDestination) => {
     onNavigate({ name: 'Review', params: { gem } });
   };
 
-  const handleResetMap = () => {
-    mapRef.current?.animateToRegion(region, 400);
-  };
-
   // ── ListHeaderComponent ──────────────────────────────────────────────
   const ListHeader = (
     <View style={styles.headerContainer}>
-      {/* ── Peta Interaktif ── */}
+      {/* ── Peta Interaktif Leaflet (100% Terlihat, Bebas Layar Hitam) ── */}
       <View style={styles.mapWrap}>
-        <MapView
-          ref={mapRef}
+        <LeafletMapView
           style={styles.map}
-          mapType={Platform.OS === 'android' ? 'none' : 'standard'}
-          initialRegion={region}
-          showsUserLocation
-          showsCompass
-        >
-          {/* Tile Layer CartoDB/OSM untuk mencegah layar hitam di Android */}
-          <UrlTile
-            urlTemplate="https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
-            maximumZ={19}
-            flipY={false}
-            zIndex={-1}
-          />
-
-          {/* Polyline Rute Tercepat OSRM */}
-          {route.polylineCoords && route.polylineCoords.length > 0 && (
-            <Polyline
-              coordinates={route.polylineCoords.map((c) => ({
-                latitude: c.lat,
-                longitude: c.lng,
-              }))}
-              strokeColor={colors.sea}
-              strokeWidth={5}
-            />
-          )}
-
-          {/* Lingkaran Radius 15 km */}
-          {searchAreas.map((area, idx) => {
-            const isOriginArea = area.label === 'ORIGIN';
-            const strokeColor = isOriginArea
-              ? 'rgba(37, 99, 235, 0.7)'
-              : 'rgba(27, 107, 102, 0.75)';
-            const fillColor = isOriginArea
-              ? 'rgba(37, 99, 235, 0.12)'
-              : 'rgba(27, 107, 102, 0.13)';
-
-            return (
-              <Circle
-                key={`${area.label}-${idx}`}
-                center={{ latitude: area.latitude, longitude: area.longitude }}
-                radius={area.radiusKm * 1000} // 15,000 meter
-                fillColor={fillColor}
-                strokeColor={strokeColor}
-                strokeWidth={2}
-              />
-            );
-          })}
-
-          {/* Marker Titik Awal */}
-          <Marker
-            coordinate={{ latitude: origin.lat, longitude: origin.lng }}
-            title="Titik Awal"
-            description={origin.name}
-          >
-            <View style={[styles.marker, styles.originMarker]}>
-              <Ionicons name="navigate" size={14} color="#FFFFFF" />
-            </View>
-          </Marker>
-
-          {/* Marker Destinasi Multi-stop atau Tunggal */}
-          {effectiveStops.length > 0 ? (
-            effectiveStops.map((stop, idx) => {
-              const isLast = idx === effectiveStops.length - 1;
-              return (
-                <Marker
-                  key={stop.id}
-                  coordinate={{ latitude: stop.lat, longitude: stop.lng }}
-                  title={`Stop ${idx + 1}: ${stop.name}`}
-                  description={`${stop.category} • ${stop.district}`}
-                >
-                  <View
-                    style={[
-                      styles.marker,
-                      isLast ? styles.destMarker : styles.stopMarker,
-                    ]}
-                  >
-                    <Text style={styles.stopNumberText}>{idx + 1}</Text>
-                  </View>
-                </Marker>
-              );
-            })
-          ) : (
-            <Marker
-              coordinate={{ latitude: destination.lat, longitude: destination.lng }}
-              title="Destinasi Tujuan"
-              description={destination.name}
-            >
-              <View style={[styles.marker, styles.destMarker]}>
-                <Ionicons name="flag" size={14} color="#FFFFFF" />
-              </View>
-            </Marker>
-          )}
-
-          {/* Marker Tempat Alternatif Serupa */}
-          {filteredAlternatives.map((gem) => {
-            const isOriginCluster = gem.nearestCenter === 'ORIGIN';
-            return (
-              <Marker
-                key={gem.id}
-                coordinate={{ latitude: gem.lat, longitude: gem.lng }}
-                title={`${gem.name} (${gem.similarityScore}% Serupa)`}
-                description={`${gem.category} • ${gem.distanceFromHubKm} km dari hub`}
-                onPress={() => handlePressCard(gem)}
-              >
-                <View
-                  style={[
-                    styles.gemMarker,
-                    isOriginCluster ? styles.gemMarkerOrigin : styles.gemMarkerDest,
-                  ]}
-                >
-                  <Ionicons name="sparkles" size={11} color={colors.ink} />
-                </View>
-              </Marker>
-            );
-          })}
-        </MapView>
-
-        {/* Floating Reset View Button */}
-        <TouchableOpacity
-          style={styles.resetMapBtn}
-          onPress={handleResetMap}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="scan-outline" size={18} color={colors.ink} />
-        </TouchableOpacity>
+          origin={origin}
+          destination={destination}
+          stops={effectiveStops}
+          polylineCoords={route.polylineCoords}
+          searchAreas={searchAreas}
+          alternatives={filteredAlternatives}
+          onAlternativePress={handlePressCard}
+        />
       </View>
 
       {/* ── Kartu Rute Tercepat (Komparasi Motor vs Mobil + Multi-stop) ── */}

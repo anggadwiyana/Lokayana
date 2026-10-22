@@ -10,8 +10,8 @@ import {
   Alert,
   ScrollView,
 } from 'react-native';
-import MapView, { Marker, UrlTile } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
+import LeafletMapView from './LeafletMapView';
 import * as Location from 'expo-location';
 import { colors, fonts } from '../theme';
 import type { Coordinate } from '../types';
@@ -39,7 +39,6 @@ export default function MapLocationPickerModal({
   onSelect,
   onClose,
 }: Props) {
-  const mapRef = useRef<MapView>(null);
   const [selectedCoord, setSelectedCoord] = useState<Coordinate>(
     initialCoord ?? { lat: -8.7184, lng: 115.1686 } // Default Kuta
   );
@@ -73,15 +72,6 @@ export default function MapLocationPickerModal({
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const coord = { lat: loc.coords.latitude, lng: loc.coords.longitude };
       updateCoord(coord, 'Lokasi Saat Ini (GPS)');
-      mapRef.current?.animateToRegion(
-        {
-          latitude: coord.lat,
-          longitude: coord.lng,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        },
-        500
-      );
     } catch {
       Alert.alert('Gagal Membaca GPS', 'Pastikan GPS perangkat Anda aktif.');
     } finally {
@@ -91,15 +81,6 @@ export default function MapLocationPickerModal({
 
   const handleSelectPreset = (preset: { name: string; lat: number; lng: number }) => {
     updateCoord({ lat: preset.lat, lng: preset.lng }, preset.name);
-    mapRef.current?.animateToRegion(
-      {
-        latitude: preset.lat,
-        longitude: preset.lng,
-        latitudeDelta: 0.06,
-        longitudeDelta: 0.06,
-      },
-      400
-    );
   };
 
   const handleConfirm = () => {
@@ -157,43 +138,12 @@ export default function MapLocationPickerModal({
 
         {/* Map */}
         <View style={styles.mapWrap}>
-          <MapView
-            ref={mapRef}
+          <LeafletMapView
             style={styles.map}
-            mapType={Platform.OS === 'android' ? 'none' : 'standard'}
-            initialRegion={{
-              latitude: selectedCoord.lat,
-              longitude: selectedCoord.lng,
-              latitudeDelta: BALI_CENTER.latitudeDelta,
-              longitudeDelta: BALI_CENTER.longitudeDelta,
-            }}
-            onPress={handleMapPress}
-            showsUserLocation
-          >
-            <UrlTile
-              urlTemplate="https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
-              maximumZ={19}
-              flipY={false}
-              zIndex={-1}
-            />
-            <Marker
-              coordinate={{ latitude: selectedCoord.lat, longitude: selectedCoord.lng }}
-              draggable
-              onDragEnd={(e) => {
-                const { latitude, longitude } = e.nativeEvent.coordinate;
-                updateCoord({ lat: latitude, lng: longitude });
-              }}
-              title="Titik Terpilih"
-              description={locationName}
-            >
-              <View style={styles.pinContainer}>
-                <View style={styles.pinPulse} />
-                <View style={styles.pin}>
-                  <Ionicons name="location" size={22} color="#FFFFFF" />
-                </View>
-              </View>
-            </Marker>
-          </MapView>
+            selectedCoord={selectedCoord}
+            isPickerMode
+            onCoordSelected={(coord) => updateCoord(coord)}
+          />
 
           {/* Floating GPS Button */}
           <TouchableOpacity

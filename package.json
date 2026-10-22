@@ -1,0 +1,10 @@
+{
+  "name": "lokayana-ai-workspace",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix apps/mobile start",
+    "android": "npm --prefix apps/mobile run android",
+    "ios": "npm --prefix apps/mobile run ios",
+    "web": "npm --prefix apps/mobile run web"
+  }
+}
