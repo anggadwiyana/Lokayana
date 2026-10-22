@@ -38,7 +38,7 @@ export default function LeafletMapView({
 }: LeafletMapViewProps) {
   const webViewRef = useRef<WebView>(null);
 
-  // HTML & JS Leaflet Map Template
+  // HTML & JS Leaflet Map Template (Retina / High-DPI Enabled)
   const htmlContent = useMemo(() => {
     const originJson = origin ? JSON.stringify(origin) : 'null';
     const destJson = destination ? JSON.stringify(destination) : 'null';
@@ -56,11 +56,11 @@ export default function LeafletMapView({
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body, #map {
       width: 100%;
       height: 100%;
@@ -68,6 +68,14 @@ export default function LeafletMapView({
       padding: 0;
       background: #E6EFEC;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    img.leaflet-tile {
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: crisp-edges;
     }
     .custom-icon {
       background: none;
@@ -132,6 +140,13 @@ export default function LeafletMapView({
       font-size: 11px;
       color: #64748B;
     }
+    .leaflet-control-layers {
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      font-size: 11px;
+      font-weight: 600;
+      color: #0E2A2B;
+    }
   </style>
 </head>
 <body>
@@ -142,11 +157,46 @@ export default function LeafletMapView({
       attributionControl: false
     }).setView([-8.55, 115.2], 10);
 
-    // Tile layer: Esri World Street Map (sama persis dengan web Streamlit Lokayana)
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-      maxZoom: 19,
-      attribution: 'Tiles &copy; Esri'
-    }).addTo(map);
+    // ── Layer 1: Esri World Street Map (dengan Retina High-DPI support) ──
+    var esriLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 19,
+        detectRetina: true,
+        attribution: 'Tiles &copy; Esri'
+      }
+    );
+
+    // ── Layer 2: CartoDB Voyager HD @2x (Super Tajam di Layar HP) ──
+    var cartoLayer = L.tileLayer(
+      'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+      {
+        maxZoom: 19,
+        detectRetina: true,
+        attribution: '&copy; CartoDB'
+      }
+    );
+
+    // ── Layer 3: OpenStreetMap Standard ──
+    var osmLayer = L.tileLayer(
+      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {
+        maxZoom: 19,
+        detectRetina: true,
+        attribution: '&copy; OpenStreetMap'
+      }
+    );
+
+    // Aktifkan Esri sebagai layer utama
+    esriLayer.addTo(map);
+
+    // Tambahkan Layer Switcher (Pojok Kanan Atas)
+    var baseLayers = {
+      "Esri Street (Tajam)": esriLayer,
+      "CartoDB HD (Ultra Tajam)": cartoLayer,
+      "OpenStreetMap": osmLayer
+    };
+    L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
 
     var isPicker = ${isPickerMode ? 'true' : 'false'};
     var origin = ${originJson};
@@ -340,6 +390,9 @@ export default function LeafletMapView({
         onMessage={handleMessage}
         javaScriptEnabled
         domStorageEnabled
+        scalesPageToFit={false}
+        showsVerticalScrollIndicator={false}
+        showsHorizontalScrollIndicator={false}
         startInLoadingState
         renderLoading={() => (
           <View style={styles.loadingWrap}>
