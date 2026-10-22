@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
 import type { AlternativeDestination } from '../types';
+import { getDestinationImageUrl, getCategoryFallbackImage } from '../utils/imageHelper';
 
 interface Props {
   visible: boolean;
@@ -29,6 +30,16 @@ export default function DestinationDetailModal({
   onSelectAsDestination,
   onWriteReview,
 }: Props) {
+  const [imgUri, setImgUri] = useState<string>(() =>
+    gem ? getDestinationImageUrl(gem.imageUrl, gem.category) : ''
+  );
+
+  useEffect(() => {
+    if (gem) {
+      setImgUri(getDestinationImageUrl(gem.imageUrl, gem.category));
+    }
+  }, [gem]);
+
   if (!gem) return null;
 
   const handleOpenGoogleMaps = () => {
@@ -58,13 +69,14 @@ export default function DestinationDetailModal({
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
             {/* Image */}
             <View style={styles.imageContainer}>
-              {gem.imageUrl ? (
-                <Image source={{ uri: gem.imageUrl }} style={styles.image} resizeMode="cover" />
-              ) : (
-                <View style={[styles.image, styles.imageFallback]}>
-                  <Ionicons name="compass" size={48} color={colors.sea} />
-                </View>
-              )}
+              <Image
+                source={{ uri: imgUri }}
+                style={styles.image}
+                resizeMode="cover"
+                onError={() => {
+                  if (gem) setImgUri(getCategoryFallbackImage(gem.category));
+                }}
+              />
 
               <View style={styles.similarityBadge}>
                 <Ionicons name="sparkles" size={14} color={colors.ink} />

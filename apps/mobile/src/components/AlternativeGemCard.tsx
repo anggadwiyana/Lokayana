@@ -1,8 +1,9 @@
-import React, { memo } from 'react';
+import React, { memo, useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
 import type { AlternativeDestination } from '../types';
+import { getDestinationImageUrl, getCategoryFallbackImage } from '../utils/imageHelper';
 
 interface Props {
   gem: AlternativeDestination;
@@ -12,6 +13,14 @@ interface Props {
 }
 
 function AlternativeGemCardComponent({ gem, isDualRadius, onPressCard, onPressReview }: Props) {
+  const [imgUri, setImgUri] = useState<string>(() =>
+    getDestinationImageUrl(gem.imageUrl, gem.category)
+  );
+
+  useEffect(() => {
+    setImgUri(getDestinationImageUrl(gem.imageUrl, gem.category));
+  }, [gem.imageUrl, gem.category]);
+
   // Format center badge text
   const getCenterBadge = () => {
     if (!isDualRadius) {
@@ -51,14 +60,12 @@ function AlternativeGemCardComponent({ gem, isDualRadius, onPressCard, onPressRe
       >
         {/* Cover Photo */}
         <View style={styles.photoContainer}>
-          {gem.imageUrl ? (
-            <Image source={{ uri: gem.imageUrl }} style={styles.photo} resizeMode="cover" />
-          ) : (
-            <View style={[styles.photo, styles.photoFallback]}>
-              <Ionicons name="compass-outline" size={38} color={colors.sea} />
-              <Text style={styles.photoFallbackText}>{gem.category}</Text>
-            </View>
-          )}
+          <Image
+            source={{ uri: imgUri }}
+            style={styles.photo}
+            resizeMode="cover"
+            onError={() => setImgUri(getCategoryFallbackImage(gem.category))}
+          />
 
           {/* AI Similarity Badge */}
           <View style={styles.similarityBadge}>

@@ -41,6 +41,7 @@ import {
   findNearestDestination,
 } from '../services/destinationService';
 import { getRecommendations } from '../services/recommenderService';
+import { getDestinationImageUrl } from '../utils/imageHelper';
 
 interface Props {
   onNavigate: (screen: AppScreen) => void;
@@ -391,13 +392,10 @@ export default function HomeScreen({ onNavigate }: Props) {
                     onPress={() => handleToggleDestination(item)}
                     activeOpacity={0.7}
                   >
-                    {item.imageUrl ? (
-                      <Image source={{ uri: item.imageUrl }} style={styles.resultThumb} />
-                    ) : (
-                      <View style={[styles.resultThumb, styles.resultThumbFallback]}>
-                        <Ionicons name="compass" size={16} color={colors.sea} />
-                      </View>
-                    )}
+                    <Image
+                      source={{ uri: getDestinationImageUrl(item.imageUrl, item.category) }}
+                      style={styles.resultThumb}
+                    />
                     <View style={styles.resultInfo}>
                       <Text style={styles.resultName} numberOfLines={1}>
                         {item.name}
@@ -453,13 +451,10 @@ export default function HomeScreen({ onNavigate }: Props) {
                       onPress={() => handleToggleDestination(dest)}
                       activeOpacity={0.8}
                     >
-                      {dest.imageUrl ? (
-                        <Image source={{ uri: dest.imageUrl }} style={styles.highlightImg} />
-                      ) : (
-                        <View style={[styles.highlightImg, styles.highlightImgFallback]}>
-                          <Ionicons name="image" size={20} color={colors.sea} />
-                        </View>
-                      )}
+                      <Image
+                        source={{ uri: getDestinationImageUrl(dest.imageUrl, dest.category) }}
+                        style={styles.highlightImg}
+                      />
                       <Text style={styles.highlightName} numberOfLines={1}>
                         {dest.name}
                       </Text>
