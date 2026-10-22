@@ -164,6 +164,10 @@ Setelah aplikasi terbuka di HP, Anda bisa mencoba fitur-fiturnya:
 ---
 
 ## 👥 Pengembang & Lisensi
-* **Angga Dwiyana** ([@anggadwiyana](https://github.com/anggadwiyana))
+* **Kadek Angga Dwiyana Putra** ([@anggadwiyana](https://github.com/anggadwiyana))
+* **Ni Luh Angelina Nadia** ([@angienadia](https://github.com/anggienadia))
+* **Pande Nyoman Temaja Erlangga** ([@TejaErlangga](https://github.com/TejaErlangga))
+* **Komang Astri Saptari** ([@astrisaptari](https://github.com/astrisaptari))
+* **Putu Aldo Chrisna Arkananta Suwidana** ([@TheNightShadeee](https://github.com/TheNightShadeee))
 * Mata Kuliah: **Kecerdasan Buatan / Kecerdasan Tiruan** (Semester 3)
 * Lisensi: MIT
