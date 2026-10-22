@@ -21,9 +21,10 @@ import {
   TouchableOpacity,
   Platform,
   StatusBar,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import LeafletMapView from '../components/LeafletMapView';
+import LeafletMapView, { LeafletMapViewHandle } from '../components/LeafletMapView';
 import { colors, fonts } from '../theme';
 import type { AppScreen, RecommendationResponse, AlternativeDestination } from '../types';
 import FastestRouteCard from '../components/FastestRouteCard';
@@ -52,9 +53,14 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
   const effectiveStops = orderedDestinations ?? stops ?? [];
   const isMultiStop = effectiveStops.length > 1;
 
+  const leafletRef = useRef<LeafletMapViewHandle>(null);
+  const fullscreenLeafletRef = useRef<LeafletMapViewHandle>(null);
+
   const [selectedGem, setSelectedGem] = useState<AlternativeDestination | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [activeFilterTab, setActiveFilterTab] = useState<'ALL' | 'DESTINATION' | 'ORIGIN'>('ALL');
+  const [isMapLocked, setIsMapLocked] = useState(false);
+  const [fullscreenMapVisible, setFullscreenMapVisible] = useState(false);
 
   // Filter alternatif berdasarkan tab yang dipilih
   const filteredAlternatives = useMemo(() => {
@@ -88,18 +94,90 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
   // ── ListHeaderComponent ──────────────────────────────────────────────
   const ListHeader = (
     <View style={styles.headerContainer}>
-      {/* ── Peta Interaktif Leaflet (100% Terlihat, Bebas Layar Hitam) ── */}
-      <View style={styles.mapWrap}>
-        <LeafletMapView
-          style={styles.map}
-          origin={origin}
-          destination={destination}
-          stops={effectiveStops}
-          polylineCoords={route.polylineCoords}
-          searchAreas={searchAreas}
-          alternatives={filteredAlternatives}
-          onAlternativePress={handlePressCard}
-        />
+      {/* ── Kontrol Peta & Hitbox Area Interaktif ── */}
+      <View style={[styles.mapContainer, isMapLocked && styles.mapContainerActive]}>
+        {/* Map Toolbar Controls */}
+        <View style={styles.mapToolbar}>
+          <TouchableOpacity
+            style={[styles.lockToggleBtn, isMapLocked && styles.lockToggleBtnActive]}
+            onPress={() => setIsMapLocked((prev) => !prev)}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={isMapLocked ? 'lock-closed' : 'hand-left-outline'}
+              size={15}
+              color={isMapLocked ? '#FFFFFF' : colors.sea}
+            />
+            <Text style={[styles.lockToggleText, isMapLocked && styles.lockToggleTextActive]}>
+              {isMapLocked ? 'Mode Geser Peta: AKTIF' : 'Kunci Layar (Geser Peta)'}
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.mapToolbarRight}>
+            <TouchableOpacity
+              style={styles.toolbarIconBtn}
+              onPress={() => leafletRef.current?.resetView()}
+              activeOpacity={0.7}
+              accessibilityLabel="Pusatkan Rute"
+            >
+              <Ionicons name="locate-outline" size={17} color={colors.ink} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.toolbarIconBtn}
+              onPress={() => setFullscreenMapVisible(true)}
+              activeOpacity={0.7}
+              accessibilityLabel="Layar Penuh"
+            >
+              <Ionicons name="scan-outline" size={17} color={colors.ink} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ── Peta Interaktif Leaflet ── */}
+        <View style={[styles.mapWrap, isMapLocked && styles.mapWrapActive]}>
+          <LeafletMapView
+            ref={leafletRef}
+            style={styles.map}
+            origin={origin}
+            destination={destination}
+            stops={effectiveStops}
+            polylineCoords={route.polylineCoords}
+            searchAreas={searchAreas}
+            alternatives={filteredAlternatives}
+            onAlternativePress={handlePressCard}
+          />
+
+          {/* Active Helper Banner when isMapLocked is TRUE */}
+          {isMapLocked ? (
+            <View style={styles.mapActiveBanner}>
+              <View style={styles.activeDot} />
+              <Text style={styles.mapActiveBannerText}>
+                Layar dikunci — Bebas geser & zoom peta
+              </Text>
+              <TouchableOpacity
+                onPress={() => setIsMapLocked(false)}
+                style={styles.unlockSmallBtn}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.unlockSmallBtnText}>Selesai</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* Quick Hitbox Hint when NOT locked */
+            <TouchableOpacity
+              style={styles.mapInactiveHint}
+              onPress={() => setIsMapLocked(true)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="hand-left-outline" size={13} color={colors.ink} />
+              <Text style={styles.mapInactiveHintText}>
+                Ketuk untuk geser peta tanpa scroll layar
+              </Text>
+              <Ionicons name="chevron-forward" size={12} color={colors.muted} />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* ── Kartu Rute Tercepat (Komparasi Motor vs Mobil + Multi-stop) ── */}
@@ -226,6 +304,7 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
 
       {/* ── Content List ── */}
       <FlatList
+        scrollEnabled={!isMapLocked}
         data={filteredAlternatives}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
@@ -264,6 +343,83 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
             : undefined
         }
       />
+
+      {/* ── Modal Peta Layar Penuh (Bebas Geser 100% Seluruh Bali) ── */}
+      <Modal
+        visible={fullscreenMapVisible}
+        animationType="slide"
+        onRequestClose={() => setFullscreenMapVisible(false)}
+      >
+        <View style={styles.fullscreenRoot}>
+          <StatusBar barStyle="light-content" backgroundColor={colors.ink} />
+
+          {/* Fullscreen Header */}
+          <View style={styles.fullscreenHeader}>
+            <TouchableOpacity
+              style={styles.fullscreenBackBtn}
+              onPress={() => setFullscreenMapVisible(false)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={24} color="#FFFFFF" />
+            </TouchableOpacity>
+
+            <View style={styles.fullscreenTitleWrap}>
+              <Text style={styles.fullscreenTitle} numberOfLines={1}>
+                {isMultiStop
+                  ? `${origin.name} → ${effectiveStops.length} Destinasi`
+                  : `${origin.name} → ${destination.name}`}
+              </Text>
+              <Text style={styles.fullscreenSub}>
+                Peta Layar Penuh • Bebas Geser & Eksplorasi Bali
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.fullscreenActionBtn}
+              onPress={() => fullscreenLeafletRef.current?.resetView()}
+              activeOpacity={0.7}
+              accessibilityLabel="Pusatkan Rute"
+            >
+              <Ionicons name="locate" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Fullscreen Map */}
+          <View style={styles.fullscreenMapWrap}>
+            <LeafletMapView
+              ref={fullscreenLeafletRef}
+              style={styles.fullscreenMap}
+              origin={origin}
+              destination={destination}
+              stops={effectiveStops}
+              polylineCoords={route.polylineCoords}
+              searchAreas={searchAreas}
+              alternatives={filteredAlternatives}
+              onAlternativePress={(gem) => {
+                setFullscreenMapVisible(false);
+                handlePressCard(gem);
+              }}
+            />
+          </View>
+
+          {/* Bottom Floating Info Bar */}
+          <View style={styles.fullscreenBottomBar}>
+            <View style={styles.fullscreenBottomInfo}>
+              <Ionicons name="speedometer-outline" size={16} color={colors.sea} />
+              <Text style={styles.fullscreenBottomText}>
+                {route.roadDistanceKm} km • {route.motorDurationMinutes} mnt (Motor) • {route.carDurationMinutes} mnt (Mobil)
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.fullscreenCloseBtn}
+              onPress={() => setFullscreenMapVisible(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.fullscreenCloseBtnText}>Tutup Peta</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -292,8 +448,224 @@ const styles = StyleSheet.create({
   navSub: { fontFamily: fonts.regular, fontSize: 11, color: colors.mist, marginTop: 1 },
   profileBtn: { padding: 4 },
   headerContainer: { paddingBottom: 6 },
-  mapWrap: { width: '100%', height: 280, position: 'relative' },
+  mapContainer: {
+    backgroundColor: '#FFFFFF',
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  mapContainerActive: {
+    borderWidth: 2,
+    borderColor: colors.sea,
+  },
+  mapToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  lockToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#EFF6F5',
+    borderWidth: 1,
+    borderColor: colors.sea,
+  },
+  lockToggleBtnActive: {
+    backgroundColor: colors.sea,
+    borderColor: colors.sea,
+  },
+  lockToggleText: {
+    fontFamily: fonts.semiBold,
+    fontSize: 12,
+    color: colors.sea,
+  },
+  lockToggleTextActive: {
+    color: '#FFFFFF',
+  },
+  mapToolbarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  toolbarIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.mist,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  mapWrap: {
+    width: '100%',
+    height: 280,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  mapWrapActive: {
+    height: 340,
+  },
   map: { width: '100%', height: '100%' },
+  mapActiveBanner: {
+    position: 'absolute',
+    bottom: 12,
+    left: 14,
+    right: 14,
+    backgroundColor: 'rgba(14, 42, 43, 0.94)',
+    borderRadius: 24,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  activeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#22C55E',
+    marginRight: 8,
+  },
+  mapActiveBannerText: {
+    flex: 1,
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    color: '#FFFFFF',
+  },
+  unlockSmallBtn: {
+    backgroundColor: colors.turmeric,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    marginLeft: 8,
+  },
+  unlockSmallBtnText: {
+    fontFamily: fonts.bold,
+    fontSize: 11,
+    color: colors.ink,
+  },
+  mapInactiveHint: {
+    position: 'absolute',
+    bottom: 10,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.line,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  mapInactiveHintText: {
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    color: colors.ink,
+  },
+  fullscreenRoot: {
+    flex: 1,
+    backgroundColor: colors.ink,
+  },
+  fullscreenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.ink,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 6 : 44,
+    paddingBottom: 12,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  fullscreenBackBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullscreenTitleWrap: {
+    flex: 1,
+  },
+  fullscreenTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 13,
+    color: '#FFFFFF',
+  },
+  fullscreenSub: {
+    fontFamily: fonts.regular,
+    fontSize: 10,
+    color: colors.mist,
+    marginTop: 1,
+  },
+  fullscreenActionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullscreenMapWrap: {
+    flex: 1,
+    position: 'relative',
+  },
+  fullscreenMap: {
+    width: '100%',
+    height: '100%',
+  },
+  fullscreenBottomBar: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  fullscreenBottomInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  fullscreenBottomText: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    color: colors.ink,
+  },
+  fullscreenCloseBtn: {
+    backgroundColor: colors.sea,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  fullscreenCloseBtnText: {
+    fontFamily: fonts.bold,
+    fontSize: 12,
+    color: '#FFFFFF',
+  },
   marker: {
     width: 30,
     height: 30,

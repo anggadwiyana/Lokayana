@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, useCallback } from 'react';
+import React, { useRef, useMemo, useCallback, useImperativeHandle } from 'react';
 import { View, StyleSheet, StyleProp, ViewStyle, ActivityIndicator } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { colors } from '../theme';
@@ -23,35 +23,68 @@ export interface LeafletMapViewProps {
   onAlternativePress?: (gem: AlternativeDestination) => void;
 }
 
-export default function LeafletMapView({
-  style,
-  origin,
-  destination,
-  stops,
-  polylineCoords,
-  searchAreas,
-  alternatives,
-  selectedCoord,
-  isPickerMode = false,
-  onCoordSelected,
-  onAlternativePress,
-}: LeafletMapViewProps) {
-  const webViewRef = useRef<WebView>(null);
+export interface LeafletMapViewHandle {
+  resetView: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+}
 
-  // HTML & JS Leaflet Map Template (Retina / High-DPI Enabled)
-  const htmlContent = useMemo(() => {
-    const originJson = origin ? JSON.stringify(origin) : 'null';
-    const destJson = destination ? JSON.stringify(destination) : 'null';
-    const stopsJson = stops && stops.length > 0 ? JSON.stringify(stops) : '[]';
-    const polylineJson =
-      polylineCoords && polylineCoords.length > 0
-        ? JSON.stringify(polylineCoords.map((c) => [c.lat, c.lng]))
-        : '[]';
-    const areasJson = searchAreas && searchAreas.length > 0 ? JSON.stringify(searchAreas) : '[]';
-    const altsJson = alternatives && alternatives.length > 0 ? JSON.stringify(alternatives) : '[]';
-    const selectedJson = selectedCoord ? JSON.stringify(selectedCoord) : 'null';
+const LeafletMapView = React.forwardRef<LeafletMapViewHandle, LeafletMapViewProps>(
+  (
+    {
+      style,
+      origin,
+      destination,
+      stops,
+      polylineCoords,
+      searchAreas,
+      alternatives,
+      selectedCoord,
+      isPickerMode = false,
+      onCoordSelected,
+      onAlternativePress,
+    },
+    ref
+  ) => {
+    const webViewRef = useRef<WebView>(null);
 
-    return `
+    useImperativeHandle(ref, () => ({
+      resetView: () => {
+        webViewRef.current?.injectJavaScript(`
+          if (typeof window.fitRouteBounds === 'function') {
+            window.fitRouteBounds();
+          }
+          true;
+        `);
+      },
+      zoomIn: () => {
+        webViewRef.current?.injectJavaScript(`
+          if (window.map) { window.map.zoomIn(); }
+          true;
+        `);
+      },
+      zoomOut: () => {
+        webViewRef.current?.injectJavaScript(`
+          if (window.map) { window.map.zoomOut(); }
+          true;
+        `);
+      },
+    }));
+
+    // HTML & JS Leaflet Map Template (Retina / High-DPI Enabled)
+    const htmlContent = useMemo(() => {
+      const originJson = origin ? JSON.stringify(origin) : 'null';
+      const destJson = destination ? JSON.stringify(destination) : 'null';
+      const stopsJson = stops && stops.length > 0 ? JSON.stringify(stops) : '[]';
+      const polylineJson =
+        polylineCoords && polylineCoords.length > 0
+          ? JSON.stringify(polylineCoords.map((c) => [c.lat, c.lng]))
+          : '[]';
+      const areasJson = searchAreas && searchAreas.length > 0 ? JSON.stringify(searchAreas) : '[]';
+      const altsJson = alternatives && alternatives.length > 0 ? JSON.stringify(alternatives) : '[]';
+      const selectedJson = selectedCoord ? JSON.stringify(selectedCoord) : 'null';
+
+      return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -70,6 +103,7 @@ export default function LeafletMapView({
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
+      touch-action: pan-x pan-y pinch-zoom;
     }
     img.leaflet-tile {
       -webkit-backface-visibility: hidden;
@@ -140,12 +174,26 @@ export default function LeafletMapView({
       font-size: 11px;
       color: #64748B;
     }
-    .leaflet-control-layers {
-      border-radius: 8px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-      font-size: 11px;
-      font-weight: 600;
-      color: #0E2A2B;
+    .leaflet-control-zoom {
+      border: none !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.28) !important;
+      border-radius: 8px !important;
+      overflow: hidden;
+      margin-bottom: 12px !important;
+      margin-right: 12px !important;
+    }
+    .leaflet-control-zoom a {
+      width: 34px !important;
+      height: 34px !important;
+      line-height: 34px !important;
+      color: #0E2A2B !important;
+      font-size: 17px !important;
+      font-weight: 700 !important;
+      background: #FFFFFF !important;
+      border-bottom: 1px solid #E2E8F0 !important;
+    }
+    .leaflet-control-zoom a:last-child {
+      border-bottom: none !important;
     }
   </style>
 </head>
@@ -153,9 +201,13 @@ export default function LeafletMapView({
   <div id="map"></div>
   <script>
     var map = L.map('map', {
-      zoomControl: true,
+      zoomControl: false,
       attributionControl: false
     }).setView([-8.55, 115.2], 10);
+    window.map = map;
+
+    // Zoom control diposisikan di kanan bawah agar mudah dijangkau jempol
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
 
     // ── Tile Layer: Esri World Street Map (Sama persis dengan web Streamlit Lokayana) ──
     L.tileLayer(
@@ -311,84 +363,92 @@ export default function LeafletMapView({
     }
 
     // ── Fit Bounds Cerdas (Mencegah over-zoom ke laut) ──
-    if (allLatLngs.length > 1 && !isPicker) {
-      var validCoords = allLatLngs.filter(function(pt) {
-        return pt && !isNaN(pt[0]) && !isNaN(pt[1]) && Math.abs(pt[0]) <= 90 && Math.abs(pt[1]) <= 180;
-      });
-      if (validCoords.length > 1) {
-        var bounds = L.latLngBounds(validCoords);
-        if (bounds.isValid()) {
-          map.fitBounds(bounds, {
-            padding: [45, 45],
-            maxZoom: 13, // Batasi zoom maksimal di level 13 agar selalu melihat daratan pulau Bali secara proporsional
-            animate: false
-          });
+    window.fitRouteBounds = function() {
+      if (allLatLngs.length > 1 && !isPicker) {
+        var validCoords = allLatLngs.filter(function(pt) {
+          return pt && !isNaN(pt[0]) && !isNaN(pt[1]) && Math.abs(pt[0]) <= 90 && Math.abs(pt[1]) <= 180;
+        });
+        if (validCoords.length > 1) {
+          var bounds = L.latLngBounds(validCoords);
+          if (bounds.isValid()) {
+            map.fitBounds(bounds, {
+              padding: [45, 45],
+              maxZoom: 13, // Batasi zoom maksimal di level 13 agar selalu melihat daratan pulau Bali secara proporsional
+              animate: true
+            });
+          }
+        } else if (validCoords.length === 1) {
+          map.setView(validCoords[0], 11);
         }
-      } else if (validCoords.length === 1) {
-        map.setView(validCoords[0], 11);
+      } else if (allLatLngs.length === 1 && !isPicker) {
+        map.setView(allLatLngs[0], 11);
+      } else if (!isPicker) {
+        map.setView([-8.55, 115.2], 10);
       }
-    } else if (allLatLngs.length === 1 && !isPicker) {
-      map.setView(allLatLngs[0], 11);
-    } else if (!isPicker) {
-      map.setView([-8.55, 115.2], 10);
-    }
+    };
+    window.fitRouteBounds();
   </script>
 </body>
 </html>
-    `;
-  }, [
-    origin,
-    destination,
-    stops,
-    polylineCoords,
-    searchAreas,
-    alternatives,
-    selectedCoord,
-    isPickerMode,
-  ]);
+      `;
+    }, [
+      origin,
+      destination,
+      stops,
+      polylineCoords,
+      searchAreas,
+      alternatives,
+      selectedCoord,
+      isPickerMode,
+    ]);
 
-  const handleMessage = useCallback(
-    (event: { nativeEvent: { data: string } }) => {
-      try {
-        const data = JSON.parse(event.nativeEvent.data);
-        if (data.type === 'COORD_SELECTED' && onCoordSelected) {
-          onCoordSelected({ lat: data.lat, lng: data.lng });
-        } else if (data.type === 'ALTERNATIVE_CLICKED' && onAlternativePress && alternatives) {
-          const match = alternatives.find((a) => a.id === data.id);
-          if (match) {
-            onAlternativePress(match);
+    const handleMessage = useCallback(
+      (event: { nativeEvent: { data: string } }) => {
+        try {
+          const data = JSON.parse(event.nativeEvent.data);
+          if (data.type === 'COORD_SELECTED' && onCoordSelected) {
+            onCoordSelected({ lat: data.lat, lng: data.lng });
+          } else if (data.type === 'ALTERNATIVE_CLICKED' && onAlternativePress && alternatives) {
+            const match = alternatives.find((a) => a.id === data.id);
+            if (match) {
+              onAlternativePress(match);
+            }
           }
+        } catch (err) {
+          console.warn('Leaflet message parse error:', err);
         }
-      } catch (err) {
-        console.warn('Leaflet message parse error:', err);
-      }
-    },
-    [onCoordSelected, onAlternativePress, alternatives]
-  );
+      },
+      [onCoordSelected, onAlternativePress, alternatives]
+    );
 
-  return (
-    <View style={[styles.container, style]}>
-      <WebView
-        ref={webViewRef}
-        originWhitelist={['*']}
-        source={{ html: htmlContent }}
-        onMessage={handleMessage}
-        javaScriptEnabled
-        domStorageEnabled
-        scalesPageToFit={false}
-        showsVerticalScrollIndicator={false}
-        showsHorizontalScrollIndicator={false}
-        startInLoadingState
-        renderLoading={() => (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator size="small" color={colors.sea} />
-          </View>
-        )}
-        style={styles.webView}
-      />
-    </View>
-  );
-}
+    return (
+      <View style={[styles.container, style]}>
+        <WebView
+          ref={webViewRef}
+          originWhitelist={['*']}
+          source={{ html: htmlContent }}
+          onMessage={handleMessage}
+          javaScriptEnabled
+          domStorageEnabled
+          nestedScrollEnabled={true}
+          overScrollMode="never"
+          scalesPageToFit={false}
+          showsVerticalScrollIndicator={false}
+          showsHorizontalScrollIndicator={false}
+          startInLoadingState
+          renderLoading={() => (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator size="small" color={colors.sea} />
+            </View>
+          )}
+          style={styles.webView}
+        />
+      </View>
+    );
+  }
+);
+
+export default LeafletMapView;
 
 const styles = StyleSheet.create({
   container: {
@@ -408,3 +468,4 @@ const styles = StyleSheet.create({
     backgroundColor: '#E6EFEC',
   },
 });
+
