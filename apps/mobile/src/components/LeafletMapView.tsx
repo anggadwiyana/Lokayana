@@ -142,9 +142,10 @@ export default function LeafletMapView({
       attributionControl: false
     }).setView([-8.55, 115.2], 10);
 
-    // Tile layer: CartoDB Voyager raster tiles (ringan, jelas, tanpa API key)
-    L.tileLayer('https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', {
-      maxZoom: 19
+    // Tile layer: Esri World Street Map (sama persis dengan web Streamlit Lokayana)
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19,
+      attribution: 'Tiles &copy; Esri'
     }).addTo(map);
 
     var isPicker = ${isPickerMode ? 'true' : 'false'};
