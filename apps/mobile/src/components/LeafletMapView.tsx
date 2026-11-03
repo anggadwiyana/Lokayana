@@ -421,9 +421,11 @@ const LeafletMapView = React.forwardRef<LeafletMapViewHandle, LeafletMapViewProp
       [onCoordSelected, onAlternativePress, alternatives]
     );
 
+    const WebViewComponent = WebView as any;
+
     return (
       <View style={[styles.container, style]}>
-        <WebView
+        <WebViewComponent
           ref={webViewRef}
           originWhitelist={['*']}
           source={{ html: htmlContent }}

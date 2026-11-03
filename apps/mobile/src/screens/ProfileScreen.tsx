@@ -24,7 +24,7 @@ export default function ProfileScreen({ totalPoints, hiddenGemReviews, onNavigat
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.ink} />
+      <StatusBar barStyle="light-content"  />
 
       {/* Nav */}
       <View style={styles.navBar}>

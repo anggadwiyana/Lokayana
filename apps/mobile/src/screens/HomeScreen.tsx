@@ -11,7 +11,7 @@
  *    - Filter Kategori (Pantai, Pura, Patung & Monumen, Air Terjun, Bukit & Tebing, dll)
  *    - Pencarian live autocomplete dari 1.445 destinasi Bali
  *    - Quick add dari Rekomendasi Unggulan Bali atau Peta Interaktif
- * 3. Navigasi menuju kalkulasi Rute Tercepat (Greedy TSP & OSRM) & Rekomendasi Cerdas (Radius 15 km)
+ * 3. Navigasi menuju kalkulasi Rute Tercepat (A* TSP & OSRM via Python Backend) & Rekomendasi Cerdas (Radius 15 km)
  */
 import React, { useState, useCallback, useMemo } from 'react';
 import {
@@ -42,6 +42,12 @@ import {
 } from '../services/destinationService';
 import { getRecommendations } from '../services/recommenderService';
 import { getDestinationImageUrl } from '../utils/imageHelper';
+import {
+  getDestinationBestTiming,
+  getTimingStatus,
+  getCurrentTimeSlot,
+  getCurrentTimeLabel,
+} from '../utils/bestTimingHelper';
 
 interface Props {
   onNavigate: (screen: AppScreen) => void;
@@ -53,6 +59,10 @@ export default function HomeScreen({ onNavigate }: Props) {
   const [originName, setOriginName] = useState('Kuta Central');
   const [gpsLoading, setGpsLoading] = useState(false);
   const [showOriginMapModal, setShowOriginMapModal] = useState(false);
+
+  // --- Waktu Saat Ini (Real-time) ---
+  const currentTimeSlot = useMemo(() => getCurrentTimeSlot(), []);
+  const currentTimeLabel = useMemo(() => getCurrentTimeLabel(), []);
 
   // --- Multi-Destinasi ---
   const [selectedDestinations, setSelectedDestinations] = useState<Destination[]>([]);
@@ -124,11 +134,35 @@ export default function HomeScreen({ onNavigate }: Props) {
     setSelectedDestinations([]);
   };
 
-  // ── Hasil Pencarian Live Destinasi ─────────────────────────────────────
+  // ── Hasil Pencarian Live Destinasi (Diprioritaskan sesuai Waktu Kunjungan) ─
   const searchResults = useMemo(() => {
     if (!searchQuery.trim() && !selectedCategory) return [];
-    return searchDestinations(searchQuery, selectedCategory?.name).slice(0, 10);
+    const results = searchDestinations(searchQuery, selectedCategory?.name);
+    return [...results]
+      .sort((a, b) => {
+        const tA = getDestinationBestTiming(a);
+        const tB = getDestinationBestTiming(b);
+        const sA = getTimingStatus(tA.best_time);
+        const sB = getTimingStatus(tB.best_time);
+        const scoreA = sA.isIdeal ? 2 : sA.isPassed ? 0 : 1;
+        const scoreB = sB.isIdeal ? 2 : sB.isPassed ? 0 : 1;
+        return scoreB - scoreA;
+      })
+      .slice(0, 10);
   }, [searchQuery, selectedCategory]);
+
+  // Rekomendasi Unggulan yang memprioritaskan destinasi sesuai jam saat ini
+  const timeAwareHighlights = useMemo(() => {
+    return [...POPULAR_DESTINATIONS].sort((a, b) => {
+      const tA = getDestinationBestTiming(a);
+      const tB = getDestinationBestTiming(b);
+      const sA = getTimingStatus(tA.best_time);
+      const sB = getTimingStatus(tB.best_time);
+      const scoreA = sA.isIdeal ? 2 : sA.isPassed ? 0 : 1;
+      const scoreB = sB.isIdeal ? 2 : sB.isPassed ? 0 : 1;
+      return scoreB - scoreA;
+    });
+  }, []);
 
   // Set ID destinasi yang sudah dipilih untuk highlight cepat
   const selectedIdSet = useMemo(
@@ -174,7 +208,7 @@ export default function HomeScreen({ onNavigate }: Props) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.ink} />
+      <StatusBar barStyle="light-content" />
 
       {/* ── Header ── */}
       <View style={styles.header}>
@@ -189,6 +223,17 @@ export default function HomeScreen({ onNavigate }: Props) {
         >
           <Ionicons name="person-circle-outline" size={32} color={colors.turmeric} />
         </TouchableOpacity>
+      </View>
+
+      {/* ── Banner Waktu Saat Ini ── */}
+      <View style={styles.timeBanner}>
+        <Ionicons name="time-outline" size={14} color="#1D4ED8" />
+        <Text style={styles.timeBannerText}>
+          {'Sekarang '}
+          <Text style={styles.timeBannerBold}>{currentTimeLabel}</Text>
+          {' — Slot terbaik: '}
+          <Text style={styles.timeBannerBold}>{currentTimeSlot}</Text>
+        </Text>
       </View>
 
       <ScrollView
@@ -210,7 +255,7 @@ export default function HomeScreen({ onNavigate }: Props) {
               <View style={styles.locationBadgeTextWrap}>
                 <Text style={styles.locationBadgeName}>{originName}</Text>
                 <Text style={styles.locationBadgeCoord}>
-                  {origin.lat.toFixed(4)}, {origin.lng.toFixed(4)}
+                  📍 Titik keberangkatan siap
                 </Text>
               </View>
             </View>
@@ -314,28 +359,52 @@ export default function HomeScreen({ onNavigate }: Props) {
                 )}
               </View>
 
-              {selectedDestinations.map((dest, idx) => (
-                <View key={dest.id} style={styles.selectedDestCard}>
-                  <View style={styles.destIndexBadge}>
-                    <Text style={styles.destIndexText}>{idx + 1}</Text>
+              {selectedDestinations.map((dest, idx) => {
+                const timing = dest.best_timing || getDestinationBestTiming(dest);
+                const timingStatus = getTimingStatus(timing.best_time);
+                return (
+                  <View key={dest.id} style={styles.selectedDestCard}>
+                    <View style={styles.destIndexBadge}>
+                      <Text style={styles.destIndexText}>{idx + 1}</Text>
+                    </View>
+                    <View style={styles.selectedDestInfo}>
+                      <Text style={styles.selectedDestName} numberOfLines={1}>
+                        {dest.name}
+                      </Text>
+                      <Text style={styles.selectedDestMeta}>
+                        {dest.category} • {dest.district} • ★ {dest.rating.toFixed(1)}
+                      </Text>
+                      <View style={styles.destTimingBadge}>
+                        <Text style={styles.destTimingText}>
+                          {timing.icon} Waktu Terbaik: {timing.best_time} ({timing.window})
+                        </Text>
+                      </View>
+                      {/* ── Badge Status Waktu Nyata ── */}
+                      <View style={[styles.timingStatusBadge, { borderColor: timingStatus.color, backgroundColor: timingStatus.color + '18' }]}>
+                        <Text style={[styles.timingStatusText, { color: timingStatus.color }]}>
+                          {timingStatus.icon} {timingStatus.label}
+                        </Text>
+                      </View>
+                      {/* ── Warning jika waktu sudah lewat ── */}
+                      {timingStatus.isPassed && (
+                        <View style={styles.timingWarningRow}>
+                          <Ionicons name="alert-circle" size={13} color="#DC2626" />
+                          <Text style={styles.timingWarningText}>
+                            Waktu kunjungan kurang ideal hari ini — tetap bisa dikunjungi
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                    <TouchableOpacity
+                      style={styles.destRemoveBtn}
+                      onPress={() => handleRemoveDestination(dest.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="close-circle" size={20} color={colors.muted} />
+                    </TouchableOpacity>
                   </View>
-                  <View style={styles.selectedDestInfo}>
-                    <Text style={styles.selectedDestName} numberOfLines={1}>
-                      {dest.name}
-                    </Text>
-                    <Text style={styles.selectedDestMeta}>
-                      {dest.category} • {dest.district} • ★ {dest.rating.toFixed(1)}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.destRemoveBtn}
-                    onPress={() => handleRemoveDestination(dest.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="close-circle" size={20} color={colors.muted} />
-                  </TouchableOpacity>
-                </View>
-              ))}
+                );
+              })}
             </View>
           ) : (
             <Text style={styles.emptyHint}>
@@ -382,6 +451,8 @@ export default function HomeScreen({ onNavigate }: Props) {
               </Text>
               {searchResults.map((item) => {
                 const isSelected = selectedIdSet.has(item.id);
+                const itemTiming = getDestinationBestTiming(item);
+                const itemStatus = getTimingStatus(itemTiming.best_time);
                 return (
                   <TouchableOpacity
                     key={item.id}
@@ -402,6 +473,13 @@ export default function HomeScreen({ onNavigate }: Props) {
                       </Text>
                       <Text style={styles.resultMeta}>
                         {item.category} • {item.district} • ★ {item.rating.toFixed(1)}
+                      </Text>
+                      <Text style={styles.resultTimingText}>
+                        {itemTiming.icon} Best: {itemTiming.best_time} ({itemTiming.window})
+                      </Text>
+                      {/* Badge status waktu nyata di hasil pencarian */}
+                      <Text style={[styles.resultTimingStatus, { color: itemStatus.color }]}>
+                        {itemStatus.icon} {itemStatus.label}
                       </Text>
                     </View>
                     <View
@@ -439,8 +517,10 @@ export default function HomeScreen({ onNavigate }: Props) {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.highlightsScroll}
               >
-                {POPULAR_DESTINATIONS.map((dest) => {
+                {timeAwareHighlights.map((dest) => {
                   const isSelected = selectedIdSet.has(dest.id);
+                  const destTiming = getDestinationBestTiming(dest);
+                  const destStatus = getTimingStatus(destTiming.best_time);
                   return (
                     <TouchableOpacity
                       key={dest.id}
@@ -466,6 +546,15 @@ export default function HomeScreen({ onNavigate }: Props) {
                           color={isSelected ? colors.sea : colors.muted}
                         />
                       </View>
+                      <Text
+                        style={[
+                          styles.highlightTimingText,
+                          { color: destStatus.color },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {destTiming.icon} {destStatus.isIdeal ? 'Ideal Sekarang' : destTiming.best_time}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -483,7 +572,7 @@ export default function HomeScreen({ onNavigate }: Props) {
           <Text style={styles.radiusRuleDesc}>
             • <Text style={styles.boldText}>Jarak {'>'} 15 km:</Text> Sistem mencari alternatif di <Text style={styles.boldText}>2 radius</Text> (15 km dari titik awal & 15 km dari destinasi).{'\n'}
             • <Text style={styles.boldText}>Jarak ≤ 15 km:</Text> Sistem menggabungkannya ke dalam <Text style={styles.boldText}>1 radius</Text> (15 km).{'\n'}
-            • <Text style={styles.boldText}>Multi-Destinasi:</Text> Mengoptimalkan urutan rute (Greedy TSP) & memetakan alternatif di seluruh simpul 15 km.
+            • <Text style={styles.boldText}>Multi-Destinasi:</Text> Mengoptimalkan urutan rute dengan <Text style={styles.boldText}>Time-Aware A* TSP</Text> (jarak terpendek + waktu kunjungan terbaik).
           </Text>
         </View>
 
@@ -844,4 +933,80 @@ const styles = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.45 },
   submitBtnText: { fontFamily: fonts.extraBold, fontSize: 15, color: colors.ink },
+  destTimingBadge: {
+    backgroundColor: 'rgba(244, 180, 26, 0.15)',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(244, 180, 26, 0.35)',
+  },
+  destTimingText: {
+    fontFamily: fonts.bold,
+    fontSize: 10,
+    color: '#92610A',
+  },
+  resultTimingText: {
+    fontFamily: fonts.medium,
+    fontSize: 10,
+    color: colors.sea,
+    marginTop: 2,
+  },
+  // ── Styles Waktu Nyata ──
+  timeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#BFDBFE',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  timeBannerText: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    color: '#1D4ED8',
+  },
+  timeBannerBold: {
+    fontFamily: fonts.bold,
+    fontSize: 12,
+    color: '#1D4ED8',
+  },
+  timingStatusBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginTop: 4,
+    borderWidth: 1,
+  },
+  timingStatusText: {
+    fontFamily: fonts.bold,
+    fontSize: 10,
+  },
+  timingWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 3,
+  },
+  timingWarningText: {
+    fontFamily: fonts.medium,
+    fontSize: 10,
+    color: '#DC2626',
+    flex: 1,
+  },
+  resultTimingStatus: {
+    fontFamily: fonts.bold,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  highlightTimingText: {
+    fontFamily: fonts.bold,
+    fontSize: 9,
+    marginTop: 3,
+  },
 });

@@ -22,6 +22,15 @@ export interface SearchArea {
   description: string;
 }
 
+export interface BestTiming {
+  best_time: string; // 'Subuh' | 'Pagi' | 'Siang' | 'Sore' | 'Malam'
+  window: string;    // mis. '16:00 – 18:30'
+  icon: string;      // mis. '🌅'
+  reason: string;    // Alasan waktu terbaik
+  avoid: string;     // Waktu yang sebaiknya dihindari
+  time_order: number;
+}
+
 export interface Destination {
   id: string;
   name: string;
@@ -35,6 +44,7 @@ export interface Destination {
   lng: number;
   mapLink: string;
   imageUrl: string | null;
+  best_timing?: BestTiming;
 }
 
 export interface AlternativeDestination extends Destination {
@@ -53,6 +63,7 @@ export interface AlternativeDestination extends Destination {
   };
   rewardPoints: number;
   firstReviewBonusPoints: number;
+  best_timing?: BestTiming;
 }
 
 export type HiddenGem = AlternativeDestination;

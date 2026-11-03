@@ -5,21 +5,23 @@
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
     "@expo/vector-icons": "^15.1.1",
-    "expo": "~57.0.24",
-    "expo-font": "~57.0.4",
-    "expo-location": "~57.0.19",
-    "expo-status-bar": "~57.0.1",
-    "react": "19.2.3",
-    "react-native": "0.86.3",
-    "react-native-maps": "1.27.2",
-    "react-native-webview": "13.16.1"
+    "expo": "^58.0.22",
+    "expo-font": "~58.0.11",
+    "expo-location": "~58.0.20",
+    "expo-status-bar": "~58.0.4",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-maps": "1.29.11",
+    "react-native-webview": "14.0.1"
   },
   "devDependencies": {
-    "@types/react": "~19.2.2",
+    "@types/react": "~19.3.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
+    "start:offline": "expo start --offline -c",
+    "tunnel": "expo start --tunnel",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"

@@ -275,7 +275,7 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.ink} />
+      <StatusBar barStyle="light-content" />
 
       {/* ── Top Bar ── */}
       <View style={styles.navBar}>
@@ -351,7 +351,7 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
         onRequestClose={() => setFullscreenMapVisible(false)}
       >
         <View style={styles.fullscreenRoot}>
-          <StatusBar barStyle="light-content" backgroundColor={colors.ink} />
+          <StatusBar barStyle="light-content" />
 
           {/* Fullscreen Header */}
           <View style={styles.fullscreenHeader}>

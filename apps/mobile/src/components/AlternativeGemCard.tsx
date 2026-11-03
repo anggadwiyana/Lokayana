@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
 import type { AlternativeDestination } from '../types';
 import { getDestinationImageUrl, getCategoryFallbackImage } from '../utils/imageHelper';
+import { getDestinationBestTiming, getTimingStatus } from '../utils/bestTimingHelper';
 
 interface Props {
   gem: AlternativeDestination;
@@ -13,6 +14,8 @@ interface Props {
 }
 
 function AlternativeGemCardComponent({ gem, isDualRadius, onPressCard, onPressReview }: Props) {
+  const timing = gem.best_timing || getDestinationBestTiming(gem);
+  const timingStatus = getTimingStatus(timing.best_time);
   const [imgUri, setImgUri] = useState<string>(() =>
     getDestinationImageUrl(gem.imageUrl, gem.category)
   );
@@ -106,6 +109,28 @@ function AlternativeGemCardComponent({ gem, isDualRadius, onPressCard, onPressRe
               <Ionicons name="map-outline" size={12} color={colors.muted} />
               <Text style={styles.locationText} numberOfLines={1}>
                 {gem.district}, {gem.city}
+              </Text>
+            </View>
+          </View>
+
+          {/* Best Timing Tag */}
+          <View style={styles.timingRowContainer}>
+            <View style={styles.timingRow}>
+              <Text style={styles.timingBadgeText}>
+                {timing.icon} Best: {timing.best_time} ({timing.window})
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.timingStatusMini,
+                {
+                  backgroundColor: timingStatus.color + '1A',
+                  borderColor: timingStatus.color,
+                },
+              ]}
+            >
+              <Text style={[styles.timingStatusMiniText, { color: timingStatus.color }]}>
+                {timingStatus.icon} {timingStatus.isPassed ? 'Waktu Lewat' : timingStatus.label}
               </Text>
             </View>
           </View>
@@ -269,6 +294,37 @@ const styles = StyleSheet.create({
     fontFamily: fonts.regular,
     fontSize: 11,
     color: colors.muted,
+  },
+  timingRowContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+  },
+  timingRow: {
+    backgroundColor: 'rgba(244, 180, 26, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: 'rgba(244, 180, 26, 0.35)',
+  },
+  timingStatusMini: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  timingStatusMiniText: {
+    fontFamily: fonts.bold,
+    fontSize: 9,
+  },
+  timingBadgeText: {
+    fontFamily: fonts.bold,
+    fontSize: 10,
+    color: '#92610A',
   },
   statsRow: {
     flexDirection: 'row',

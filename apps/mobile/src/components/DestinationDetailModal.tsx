@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
 import type { AlternativeDestination } from '../types';
 import { getDestinationImageUrl, getCategoryFallbackImage } from '../utils/imageHelper';
+import { getDestinationBestTiming, getTimingStatus } from '../utils/bestTimingHelper';
 
 interface Props {
   visible: boolean;
@@ -41,6 +42,9 @@ export default function DestinationDetailModal({
   }, [gem]);
 
   if (!gem) return null;
+
+  const timing = gem.best_timing || getDestinationBestTiming(gem);
+  const timingStatus = getTimingStatus(timing.best_time);
 
   const handleOpenGoogleMaps = () => {
     if (gem.mapLink) {
@@ -100,6 +104,55 @@ export default function DestinationDetailModal({
               <Text style={styles.location}>
                 📍 {gem.district}, {gem.city}, Bali
               </Text>
+
+              {/* Best Visit Timing Card */}
+              <View style={styles.timingCard}>
+                <View style={styles.timingCardHeader}>
+                  <Text style={styles.timingIconLarge}>{timing.icon}</Text>
+                  <View style={styles.timingHeaderTextWrap}>
+                    <View style={styles.timingTitleRow}>
+                      <Text style={styles.timingTitle}>
+                        Waktu Terbaik: {timing.best_time} ({timing.window})
+                      </Text>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          {
+                            backgroundColor: timingStatus.color + '1A',
+                            borderColor: timingStatus.color,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.statusBadgeText, { color: timingStatus.color }]}>
+                          {timingStatus.icon} {timingStatus.label}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.timingSubtitle}>{timing.reason}</Text>
+                  </View>
+                </View>
+
+                {/* Warning jika waktu kunjungan sudah lewat */}
+                {timingStatus.isPassed && (
+                  <View style={styles.timingPassedAlert}>
+                    <Ionicons name="warning-outline" size={15} color="#DC2626" />
+                    <Text style={styles.timingPassedAlertText}>
+                      <Text style={styles.timingPassedAlertBold}>Pemberitahuan Waktu: </Text>
+                      Waktu kunjungan kurang ideal untuk hari ini karena waktu terbaik ({timing.best_time}) sudah lewat. Namun jika Anda tetap ingin berkunjung, hal tersebut tidak masalah.
+                    </Text>
+                  </View>
+                )}
+
+                {timing.avoid && (
+                  <View style={styles.avoidRow}>
+                    <Ionicons name="alert-circle-outline" size={14} color="#DC2626" />
+                    <Text style={styles.avoidText}>
+                      <Text style={styles.avoidBold}>Hindari: </Text>
+                      {timing.avoid}
+                    </Text>
+                  </View>
+                )}
+              </View>
 
               {/* Similarity Explanation */}
               <View style={styles.reasonCard}>
@@ -268,6 +321,96 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(244, 180, 26, 0.4)',
     marginBottom: 16,
+  },
+  timingCard: {
+    backgroundColor: '#FFFDF5',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(244, 180, 26, 0.4)',
+    marginBottom: 12,
+  },
+  timingCardHeader: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+  },
+  timingIconLarge: {
+    fontSize: 24,
+  },
+  timingHeaderTextWrap: {
+    flex: 1,
+  },
+  timingTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  timingTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 13,
+    color: '#854D0E',
+  },
+  statusBadge: {
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  statusBadgeText: {
+    fontFamily: fonts.bold,
+    fontSize: 10,
+  },
+  timingPassedAlert: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 8,
+  },
+  timingPassedAlertText: {
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    color: '#991B1B',
+    lineHeight: 16,
+  },
+  timingPassedAlertBold: {
+    fontFamily: fonts.bold,
+    color: '#DC2626',
+  },
+  timingSubtitle: {
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    color: colors.ink,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  avoidRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(244, 180, 26, 0.25)',
+  },
+  avoidText: {
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    color: '#991B1B',
+    lineHeight: 15,
+  },
+  avoidBold: {
+    fontFamily: fonts.bold,
+    color: '#DC2626',
   },
   reasonTextWrap: { flex: 1 },
   reasonTitle: { fontFamily: fonts.bold, fontSize: 12, color: colors.ink, marginBottom: 2 },

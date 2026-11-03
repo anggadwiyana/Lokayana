@@ -1,3 +1,18 @@
+/**
+ * recommenderService.ts — Hybrid Engine: Python Backend Client + Resilient Local Fallback
+ * =======================================================================================
+ * Sistem utama:
+ *   1. Mencoba menghubungi Python FastAPI Backend (POST /api/route)
+ *      yang menjalankan Time-Aware A* TSP & AI Similarity Engine.
+ *   2. Jika backend offline/unreachable (misal laptop belum menyalakan python),
+ *      secara otomatis fallback ke kalkulasi lokal (Time-Aware A* + Best Timing)
+ *      sehingga presentasi / aplikasi mobile tetap 100% berjalan tanpa crash!
+ *
+ * @see apps/backend/core/astar.py       — Time-Aware A* TSP Solver (Python)
+ * @see apps/backend/core/best_timing.py — Best Timing Knowledge Base (Python)
+ * @see apps/mobile/src/utils/bestTimingHelper.ts — Best Timing Knowledge Base (TypeScript)
+ */
+
 import type {
   AlternativeDestination,
   Coordinate,
@@ -5,12 +20,18 @@ import type {
   RecommendationResponse,
   SearchArea,
 } from '../types';
-import {
-  calculateHaversineDistance,
-  calculateGreedyOrder,
-  calculateMultiStopRoute,
-} from './routingService';
-import { getAllDestinations, findNearestDestination } from './destinationService';
+import { getAllDestinations } from './destinationService';
+import { API_BASE_URL } from '../config/api';
+import { calculateHaversineDistance, calculateMultiStopRoute } from './routingService';
+import { calculateTimeAwareOrder, getDestinationBestTiming } from '../utils/bestTimingHelper';
+
+// ─── Konstanta ─────────────────────────────────────────────────────────────
+
+/** Timeout cepat untuk cek backend (ms). Jika lewat batas, beralih ke local fallback */
+const REQUEST_TIMEOUT_MS = 2_500;
+const RADIUS_KM = 15.0;
+
+// ─── Semantic Keywords untuk Kemiripan Lokal ────────────────────────────────
 
 const KEYWORD_LIST = [
   'pantai', 'beach', 'sunset', 'sunrise', 'pasir', 'surf', 'ombak', 'karang',
@@ -28,10 +49,7 @@ function extractKeywords(text: string): string[] {
   return KEYWORD_LIST.filter((k) => lower.includes(k));
 }
 
-/**
- * Menghitung skor kemiripan AI (0 - 100%) antara destinasi tujuan dan calon alternatif.
- */
-function calculateSimilarityScore(
+function calculateLocalSimilarity(
   target: Destination,
   candidate: Destination,
   distanceFromHubKm: number
@@ -39,7 +57,7 @@ function calculateSimilarityScore(
   let score = 0;
   const reasons: string[] = [];
 
-  // 1. Kesamaan Kategori (Bobot Maks: 45)
+  // 1. Kategori (maks 45)
   if (candidate.category === target.category) {
     score += 45;
     reasons.push(`Sama-sama kategori ${candidate.category}`);
@@ -50,18 +68,16 @@ function calculateSimilarityScore(
     score += 12;
   }
 
-  // 2. Analisis Semantik Kata Kunci (Bobot Maks: 25)
+  // 2. Semantik Keyword (maks 25)
   const targetKeywords = extractKeywords(`${target.name} ${target.category}`);
   const candidateKeywords = extractKeywords(`${candidate.name} ${candidate.category}`);
   const sharedKeywords = candidateKeywords.filter((k) => targetKeywords.includes(k));
-
   if (sharedKeywords.length > 0) {
-    const kwBonus = Math.min(25, sharedKeywords.length * 12);
-    score += kwBonus;
+    score += Math.min(25, sharedKeywords.length * 12);
     reasons.push(`Daya tarik sejenis (${sharedKeywords.slice(0, 2).join(', ')})`);
   }
 
-  // 3. Kesamaan Wilayah / Kabupaten (Bobot Maks: 15)
+  // 3. Wilayah (maks 15)
   if (candidate.city && target.city && candidate.city === target.city) {
     score += 10;
     if (candidate.district === target.district) {
@@ -70,76 +86,32 @@ function calculateSimilarityScore(
     }
   }
 
-  // 4. Rating & Kualitas (Bobot Maks: 10)
-  if (candidate.rating >= 4.7) {
-    score += 10;
-  } else if (candidate.rating >= 4.4) {
-    score += 7;
-  } else if (candidate.rating >= 4.0) {
-    score += 4;
-  }
+  // 4. Rating (maks 10)
+  if (candidate.rating >= 4.7) score += 10;
+  else if (candidate.rating >= 4.4) score += 7;
+  else if (candidate.rating >= 4.0) score += 4;
 
-  // 5. Bonus Kedekatan dalam Radius 15 km (Bobot Maks: 5)
-  const proximityBonus = Math.max(0, Math.round((15 - distanceFromHubKm) / 3));
-  score += proximityBonus;
+  // 5. Proximity bonus (maks 5)
+  score += Math.max(0, Math.round((RADIUS_KM - distanceFromHubKm) / 3));
 
-  // Normalisasi skor antara 60% - 99%
   const finalScore = Math.min(99, Math.max(62, Math.round(score)));
-  const mainReason = reasons.length > 0 ? reasons[0] : `Alternatif populer di radius 15 km`;
-
+  const mainReason = reasons[0] || 'Alternatif populer di radius 15 km';
   return { score: finalScore, reason: mainReason };
 }
 
-/**
- * Menghitung reward poin gamifikasi Lokayana
- */
-function calculatePoints(reviewCount: number, similarityScore: number): { reward: number; bonus: number } {
-  if (reviewCount < 10) {
-    return { reward: 80, bonus: 50 };
-  } else if (reviewCount < 50) {
-    return { reward: 50, bonus: 25 };
-  } else if (reviewCount < 200) {
-    return { reward: 30, bonus: 15 };
-  }
-  return { reward: 20, bonus: 10 };
-}
+// ─── Kalkulasi Lokal Fallback ───────────────────────────────────────────────
 
-/**
- * Engine Utama Rekomendasi & Optimasi Rute Lokayana AI
- * Mendukung:
- *  - Destinasi tunggal maupun multi-tujuan (Multi-Stop Trip)
- *  - Algoritma Greedy TSP untuk menentukan urutan kunjungan tercepat
- *  - Logika radius:
- *    * Jika jarak > 15 km: 2 titik radius (Origin 15 km + Destinasi 15 km)
- *    * Jika jarak <= 15 km: 1 titik radius gabungan (15 km)
- *    * Multi-destinasi: radius 15 km di setiap simpul rute
- *  - Rekomendasi alternatif serupa di sepanjang zona 15 km
- */
-export async function getRecommendations(
+async function calculateLocalFallback(
   origin: Coordinate & { name: string },
-  destination: Coordinate & { name: string; destinationObj?: Destination | null },
-  selectedDestinations?: Destination[]
+  targets: Destination[]
 ): Promise<RecommendationResponse> {
   const allDestinations = getAllDestinations();
 
-  // Tentukan daftar target destinasi
-  let targets: Destination[] = [];
-  if (selectedDestinations && selectedDestinations.length > 0) {
-    targets = [...selectedDestinations];
-  } else if (destination.destinationObj) {
-    targets = [destination.destinationObj];
-  } else {
-    targets = [findNearestDestination(destination)];
-  }
+  // 1. Urutkan menggunakan Time-Aware A* TSP
+  const orderedDestinations = calculateTimeAwareOrder(origin, targets, calculateHaversineDistance);
+  const primaryDestination = orderedDestinations[orderedDestinations.length - 1] || targets[0];
 
-  // 1. Urutkan destinasi menggunakan Greedy TSP (Nearest Neighbour)
-  const orderedDestinations = calculateGreedyOrder(origin, targets);
-  const primaryDestination = orderedDestinations[orderedDestinations.length - 1] ?? targets[0];
-
-  const RADIUS_KM = 15.0;
   const isMultiStop = orderedDestinations.length > 1;
-
-  // 2. Evaluasi Aturan Radius (Requirement 5 & 6)
   const straightDistanceKm = isMultiStop
     ? orderedDestinations.reduce((acc, cur, idx) => {
         const prev = idx === 0 ? origin : orderedDestinations[idx - 1];
@@ -149,9 +121,9 @@ export async function getRecommendations(
 
   const isDualRadius = isMultiStop || straightDistanceKm > RADIUS_KM;
 
+  // 2. Bangun search areas
   const searchAreas: SearchArea[] = [];
   if (isMultiStop) {
-    // Radius awal
     searchAreas.push({
       label: 'ORIGIN',
       latitude: origin.lat,
@@ -160,7 +132,6 @@ export async function getRecommendations(
       title: 'Radius Titik Awal (15 km)',
       description: `Zona keberangkatan sekitar ${origin.name}`,
     });
-    // Radius setiap pemberhentian
     orderedDestinations.forEach((dest, i) => {
       searchAreas.push({
         label: 'DESTINATION',
@@ -195,23 +166,18 @@ export async function getRecommendations(
       longitude: primaryDestination.lng,
       radiusKm: RADIUS_KM,
       title: 'Radius Tunggal (15 km)',
-      description: `Jarak perjalanan ${straightDistanceKm.toFixed(1)} km (≤ 15 km), pencarian alternatif difokuskan dalam 1 radius 15 km`,
+      description: `Jarak ${straightDistanceKm.toFixed(1)} km (≤ 15 km), pencarian dalam 1 radius 15 km`,
     });
   }
 
-  // Set ID destinasi yang sudah dipilih user agar tidak direkomendasikan kembali
+  // 3. Filter kandidat alternatif
   const selectedIds = new Set(targets.map((t) => t.id));
-
-  // 3. Filter calon destinasi dalam radius 15 km
   const candidates: AlternativeDestination[] = [];
 
   for (const candidate of allDestinations) {
     if (selectedIds.has(candidate.id)) continue;
 
-    // Cek jarak ke origin
     const distToOrigin = calculateHaversineDistance(origin, candidate);
-
-    // Cari stop terdekat ke kandidat
     let nearestStop = primaryDestination;
     let minDistToStop = Infinity;
 
@@ -239,10 +205,9 @@ export async function getRecommendations(
         }
       }
     } else if (isDualRadius) {
-      const inDestRadius = minDistToStop <= RADIUS_KM;
-      const inOriginRadius = distToOrigin <= RADIUS_KM;
-
-      if (inDestRadius && inOriginRadius) {
+      const inDest = minDistToStop <= RADIUS_KM;
+      const inOrig = distToOrigin <= RADIUS_KM;
+      if (inDest || inOrig) {
         eligible = true;
         if (minDistToStop <= distToOrigin) {
           nearestCenter = 'DESTINATION';
@@ -251,17 +216,8 @@ export async function getRecommendations(
           nearestCenter = 'ORIGIN';
           distanceFromHubKm = distToOrigin;
         }
-      } else if (inDestRadius) {
-        eligible = true;
-        nearestCenter = 'DESTINATION';
-        distanceFromHubKm = minDistToStop;
-      } else if (inOriginRadius) {
-        eligible = true;
-        nearestCenter = 'ORIGIN';
-        distanceFromHubKm = distToOrigin;
       }
     } else {
-      // Single radius mode
       if (minDistToStop <= RADIUS_KM) {
         eligible = true;
         nearestCenter = 'MERGED';
@@ -270,47 +226,31 @@ export async function getRecommendations(
     }
 
     if (eligible) {
-      const { score, reason } = calculateSimilarityScore(
-        nearestStop,
-        candidate,
-        distanceFromHubKm
-      );
-      const { reward, bonus } = calculatePoints(candidate.reviewCount, score);
-
-      const estimatedTravelMinutes = Math.max(
-        5,
-        Math.round((distanceFromHubKm / 35) * 60)
-      );
-
+      const { score, reason } = calculateLocalSimilarity(nearestStop, candidate, distanceFromHubKm);
+      const timing = getDestinationBestTiming(candidate);
       candidates.push({
         ...candidate,
         similarityScore: score,
         similarityReason: `${reason} (dekat ${nearestStop.name})`,
         distanceFromHubKm: Number(distanceFromHubKm.toFixed(1)),
         nearestCenter,
-        estimatedTravelMinutes,
+        estimatedTravelMinutes: Math.max(5, Math.round((distanceFromHubKm / 35) * 60)),
         ratings: {
           beauty: candidate.rating >= 4.5 ? candidate.rating : 4.2,
           access: candidate.rating >= 4.0 ? 4.0 : 3.5,
           facilities: candidate.rating >= 4.2 ? 4.1 : 3.8,
         },
-        rewardPoints: reward,
-        firstReviewBonusPoints: bonus,
+        rewardPoints: candidate.reviewCount < 50 ? 50 : 20,
+        firstReviewBonusPoints: candidate.reviewCount < 50 ? 25 : 10,
+        best_timing: timing,
       });
     }
   }
 
-  // 4. Urutkan berdasarkan similarity score tertinggi
-  candidates.sort((a, b) => {
-    if (b.similarityScore !== a.similarityScore) {
-      return b.similarityScore - a.similarityScore;
-    }
-    return b.rating - a.rating;
-  });
-
+  candidates.sort((a, b) => b.similarityScore - a.similarityScore || b.rating - a.rating);
   const topAlternatives = candidates.slice(0, 30);
 
-  // 5. Hitung rute tercepat (multi-stop)
+  // 4. Hitung rute multi-stop
   const routePoints = [origin, ...orderedDestinations];
   const route = await calculateMultiStopRoute(routePoints);
 
@@ -332,4 +272,57 @@ export async function getRecommendations(
     route,
     alternatives: topAlternatives,
   };
+}
+
+// ─── Entry Point Utama ──────────────────────────────────────────────────────
+
+export async function getRecommendations(
+  origin: Coordinate & { name: string },
+  destination: Coordinate & { name: string; destinationObj?: Destination | null },
+  selectedDestinations?: Destination[]
+): Promise<RecommendationResponse> {
+  const targets: Destination[] =
+    selectedDestinations && selectedDestinations.length > 0
+      ? selectedDestinations
+      : destination.destinationObj
+      ? [destination.destinationObj]
+      : [];
+
+  if (targets.length === 0) {
+    throw new Error('Pilih minimal 1 tempat wisata tujuan terlebih dahulu.');
+  }
+
+  // Coba hubungi Python Backend terlebih dahulu
+  try {
+    const allDestinations = getAllDestinations();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    const response = await fetch(`${API_BASE_URL}/api/route`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        origin_lat: origin.lat,
+        origin_lng: origin.lng,
+        origin_name: origin.name,
+        destinations: targets,
+        all_destinations: allDestinations,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data: RecommendationResponse = await response.json();
+      return data;
+    }
+  } catch {
+    // Backend offline / unreachable -> beralih ke local fallback
+  }
+
+  // Fallback: jalankan algoritma Time-Aware A* TSP secara lokal
+  return calculateLocalFallback(origin, targets);
 }

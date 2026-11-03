@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from 'rea
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
 import type { RouteInfo, Coordinate, Destination } from '../types';
+import { getDestinationBestTiming, getTimingStatus } from '../utils/bestTimingHelper';
 
 interface Props {
   route: RouteInfo;
@@ -65,23 +66,69 @@ export default function FastestRouteCard({ route, origin, destination, stops }: 
         <Text style={styles.distanceValue}>{route.roadDistanceKm} km</Text>
       </View>
 
-      {/* Multi-stop Timeline (jika multi-tujuan) */}
-      {hasMultipleStops && stops && (
+      {/* Multi-stop Timeline & Best Timing (A* TSP) */}
+      {stops && stops.length > 0 && (
         <View style={styles.itineraryBox}>
-          <View style={styles.itineraryItem}>
-            <View style={[styles.itineraryDot, { backgroundColor: '#2563EB' }]} />
-            <Text style={styles.itineraryText} numberOfLines={1}>
-              <Text style={styles.itineraryBold}>Awal:</Text> {origin.name}
+          <View style={styles.itineraryHeaderRow}>
+            <Ionicons name="time-outline" size={15} color={colors.sea} />
+            <Text style={styles.itineraryTitle}>
+              {hasMultipleStops
+                ? 'Jadwal Urutan Kunjungan Optimal (Time-Aware A* TSP)'
+                : 'Waktu Kunjungan Terbaik'}
             </Text>
           </View>
-          {stops.map((stop, idx) => (
-            <View key={stop.id} style={styles.itineraryItem}>
-              <View style={[styles.itineraryDot, { backgroundColor: colors.sea }]} />
+
+          {/* Titik Awal */}
+          <View style={styles.itineraryItem}>
+            <View style={[styles.itineraryDot, { backgroundColor: '#2563EB' }]} />
+            <View style={styles.itineraryContent}>
               <Text style={styles.itineraryText} numberOfLines={1}>
-                <Text style={styles.itineraryBold}>Stop {idx + 1}:</Text> {stop.name}
+                <Text style={styles.itineraryBold}>🚩 Awal:</Text> {origin.name}
               </Text>
             </View>
-          ))}
+          </View>
+
+          {/* Stops dengan info Best Timing */}
+          {stops.map((stop, idx) => {
+            const timing = stop.best_timing || getDestinationBestTiming(stop);
+            const timingStatus = getTimingStatus(timing.best_time);
+            return (
+              <View key={stop.id || idx} style={styles.itineraryStopItem}>
+                <View style={[styles.itineraryDot, { backgroundColor: colors.sea, marginTop: 4 }]} />
+                <View style={styles.itineraryContent}>
+                  <Text style={styles.itineraryText} numberOfLines={1}>
+                    <Text style={styles.itineraryBold}>{hasMultipleStops ? `Stop ${idx + 1}: ` : 'Tujuan: '}</Text>
+                    {stop.name}
+                  </Text>
+                  <View style={styles.timingBadgeRow}>
+                    <View style={styles.timingBadge}>
+                      <Text style={styles.timingBadgeText}>
+                        {timing.icon} {timing.best_time} • {timing.window}
+                      </Text>
+                    </View>
+                    {/* Badge status waktu nyata */}
+                    <View style={[styles.timingStatusPill, { backgroundColor: timingStatus.color + '20', borderColor: timingStatus.color }]}>
+                      <Text style={[styles.timingStatusPillText, { color: timingStatus.color }]}>
+                        {timingStatus.icon} {timingStatus.label}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.timingReasonText} numberOfLines={2}>
+                    💡 {timing.reason}
+                  </Text>
+                  {/* Warning banner jika waktu sudah lewat */}
+                  {timingStatus.isPassed && (
+                    <View style={styles.timingPassedWarning}>
+                      <Ionicons name="alert-circle" size={12} color="#DC2626" />
+                      <Text style={styles.timingPassedWarningText}>
+                        Waktu terbaik sudah lewat — tetap bisa dikunjungi
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            );
+          })}
         </View>
       )}
 
@@ -185,17 +232,66 @@ const styles = StyleSheet.create({
   },
   itineraryBox: {
     backgroundColor: colors.mist,
-    padding: 10,
-    borderRadius: 10,
+    padding: 12,
+    borderRadius: 12,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: colors.line,
+    gap: 8,
+  },
+  itineraryHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 6,
+    marginBottom: 2,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  itineraryTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 11,
+    color: colors.sea,
+    letterSpacing: 0.2,
   },
   itineraryItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  itineraryStopItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  itineraryContent: {
+    flex: 1,
+  },
+  timingBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 3,
+  },
+  timingBadge: {
+    backgroundColor: 'rgba(244, 180, 26, 0.16)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(244, 180, 26, 0.4)',
+  },
+  timingBadgeText: {
+    fontFamily: fonts.bold,
+    fontSize: 10,
+    color: '#92610A',
+  },
+  timingReasonText: {
+    fontFamily: fonts.regular,
+    fontSize: 10,
+    color: colors.muted,
+    marginTop: 2,
+    lineHeight: 14,
   },
   itineraryDot: {
     width: 8,
@@ -291,5 +387,36 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     fontSize: 13,
     color: '#FFFFFF',
+  },
+  // ── Styles Status Waktu Nyata ──
+  timingStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  timingStatusPillText: {
+    fontFamily: fonts.bold,
+    fontSize: 9,
+  },
+  timingPassedWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    marginTop: 4,
+  },
+  timingPassedWarningText: {
+    fontFamily: fonts.medium,
+    fontSize: 10,
+    color: '#DC2626',
+    flex: 1,
   },
 });

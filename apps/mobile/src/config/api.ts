@@ -1,7 +1,20 @@
-﻿import type { Category } from '../types';
+import type { Category } from '../types';
 
-// Ganti dengan IP address WiFi laptop kamu (cek dengan ipconfig)
-export const API_BASE_URL = 'http://10.226.222.70:3000';
+/**
+ * Base URL Python backend (FastAPI — A* TSP Engine).
+ *
+ * ⚠️  Ganti dengan IP WiFi laptop kamu (cek: ipconfig → IPv4 Address).
+ *     Pastikan backend sudah berjalan:
+ *       cd apps/backend
+ *       pip install -r requirements.txt
+ *       python main.py
+ *
+ * Contoh IP:
+ *   - WiFi rumah/kosan  : 'http://192.168.1.x:8000'
+ *   - Hotspot HP        : 'http://172.20.10.x:8000'
+ *   - Emulator Android  : 'http://10.0.2.2:8000'
+ */
+export const API_BASE_URL = 'http://172.16.174.115:8000';
 
 export const CATEGORIES: Category[] = [
   { id: 1, name: 'Pantai', icon: '🏖️' },
