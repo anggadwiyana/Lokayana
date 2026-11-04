@@ -521,7 +521,23 @@ export function getDestinationBestTiming(destination: { name: string; category?:
 }
 
 /**
- * Mengurutkan destinasi berdasarkan Time-Aware A* TSP (versi lokal).
+ * Mengambil jam mulai dari window best timing (mis. "06:00 – 09:00" -> 6).
+ * Fallback ke time_order slot jika format window tidak dikenali.
+ */
+function getTimingStartHour(timing: BestTiming): number {
+  const match = timing.window.match(/(\d{1,2})[:.](\d{2})/);
+  if (match) {
+    return Number(match[1]) + Number(match[2]) / 60;
+  }
+  return timing.time_order;
+}
+
+/**
+ * Mengurutkan destinasi secara kronologis berdasarkan jam terbaik kunjungan.
+ *
+ * Urutan waktu selalu naik (mis. jam 06:00 sebelum 07:00). Untuk destinasi
+ * dengan jam terbaik yang sama, dipilih yang paling dekat dari posisi terakhir
+ * agar rute tetap efisien.
  */
 export function calculateTimeAwareOrder<T extends Destination>(
   origin: { lat: number; lng: number },
@@ -536,41 +552,34 @@ export function calculateTimeAwareOrder<T extends Destination>(
     best_timing: d.best_timing || getDestinationBestTiming(d),
   }));
 
-  // Greedy on Time-Aware Cost
-  const unvisited = [...annotated];
+  const remaining = [...annotated];
   const ordered: T[] = [];
   let current: { lat: number; lng: number } = origin;
-  let prevTimeOrder: number | null = null;
 
-  while (unvisited.length > 0) {
+  while (remaining.length > 0) {
+    // Selalu proses jam terbaik paling awal terlebih dahulu.
+    const earliest = Math.min(
+      ...remaining.map((d) => getTimingStartHour(d.best_timing))
+    );
+    const sameSlot = remaining.filter(
+      (d) => getTimingStartHour(d.best_timing) === earliest
+    );
+
+    // Dalam slot waktu yang sama, pilih yang paling dekat.
     let bestIdx = 0;
-    let minCost = Infinity;
-
-    for (let i = 0; i < unvisited.length; i++) {
-      const candidate = unvisited[i];
-      const dist = haversineFn(current, candidate);
-      const candTime = candidate.best_timing.time_order;
-
-      // Penalty if moving backwards in time
-      let penalty = 0;
-      if (prevTimeOrder !== null && candTime < prevTimeOrder) {
-        penalty = (prevTimeOrder - candTime) * 16.0;
-      } else if (prevTimeOrder === null) {
-        // From origin: mild preference to start earlier in the day
-        penalty = Math.max(0, (candTime - 10.0) * 3.0);
-      }
-
-      const cost = dist + penalty;
-      if (cost < minCost) {
-        minCost = cost;
+    let minDist = Infinity;
+    for (let i = 0; i < sameSlot.length; i++) {
+      const dist = haversineFn(current, sameSlot[i]);
+      if (dist < minDist) {
+        minDist = dist;
         bestIdx = i;
       }
     }
 
-    const nextPlace = unvisited.splice(bestIdx, 1)[0];
+    const nextPlace = sameSlot[bestIdx];
+    remaining.splice(remaining.indexOf(nextPlace), 1);
     ordered.push(nextPlace as T);
     current = nextPlace;
-    prevTimeOrder = nextPlace.best_timing.time_order;
   }
 
   return ordered;

@@ -105,4 +105,5 @@ export type AppScreen =
       params: RecommendationResponse;
     }
   | { name: 'Review'; params: { gem: AlternativeDestination } }
-  | { name: 'Profile' };
+  | { name: 'Profile' }
+  | { name: 'Login' };

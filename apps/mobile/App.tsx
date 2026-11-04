@@ -9,11 +9,17 @@ import {
   PlusJakartaSans_800ExtraBold,
 } from '@expo-google-fonts/plus-jakarta-sans';
 import { colors, fonts } from './src/theme';
-import type { AppScreen, AlternativeDestination, RecommendationResponse } from './src/types';
+import type {
+  AppScreen,
+  AlternativeDestination,
+  Coordinate,
+  RecommendationResponse,
+} from './src/types';
 import HomeScreen from './src/screens/HomeScreen';
 import GemListScreen from './src/screens/GemListScreen';
 import ReviewScreen from './src/screens/ReviewScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import LoginScreen from './src/screens/LoginScreen';
 import { getRecommendations } from './src/services/recommenderService';
 
 export default function App() {
@@ -28,6 +34,16 @@ export default function App() {
   // ── State Navigasi Antar Layar ──
   const [currentScreen, setCurrentScreen] = useState<AppScreen>({ name: 'Home' });
 
+  // ── State Autentikasi (default sudah login sebagai admin) ──
+  const [authUser, setAuthUser] = useState<string | null>('admin');
+
+  // ── State Titik Awal (disimpan di App agar tidak reset saat pindah layar) ──
+  const [origin, setOrigin] = useState<Coordinate | null>({
+    lat: -8.7184,
+    lng: 115.1686,
+  }); // Default Kuta
+  const [originName, setOriginName] = useState('Kuta Central');
+
   // ── State Gamifikasi Poin & Lencana ──
   const [totalPoints, setTotalPoints] = useState<number>(180);
   const [hiddenGemReviews, setHiddenGemReviews] = useState<number>(3);
@@ -35,6 +51,24 @@ export default function App() {
   // ── Handler Ganti Screen ──
   const handleNavigate = useCallback((screen: AppScreen) => {
     setCurrentScreen(screen);
+  }, []);
+
+  // ── Handler Ubah Titik Awal ──
+  const handleOriginChange = useCallback((coord: Coordinate, name: string) => {
+    setOrigin(coord);
+    setOriginName(name);
+  }, []);
+
+  // ── Handler Logout (kembali ke Home sebagai tamu) ──
+  const handleLogout = useCallback(() => {
+    setAuthUser(null);
+    setCurrentScreen({ name: 'Home' });
+  }, []);
+
+  // ── Handler Login Berhasil ──
+  const handleLoginSuccess = useCallback((username: string) => {
+    setAuthUser(username);
+    setCurrentScreen({ name: 'Home' });
   }, []);
 
   // ── Handler Setelah Submit Ulasan ──
@@ -95,13 +129,24 @@ export default function App() {
   // ── Render Layar Aktif ──
   switch (currentScreen.name) {
     case 'Home':
-      return <HomeScreen onNavigate={handleNavigate} />;
+      return (
+        <HomeScreen
+          onNavigate={handleNavigate}
+          onLogout={handleLogout}
+          isLoggedIn={authUser !== null}
+          origin={origin}
+          originName={originName}
+          onOriginChange={handleOriginChange}
+        />
+      );
 
     case 'GemList':
       return (
         <GemListScreen
           params={currentScreen.params}
           onNavigate={handleNavigate}
+          onLogout={handleLogout}
+          isLoggedIn={authUser !== null}
           onSwitchDestination={handleSwitchDestination}
         />
       );
@@ -120,12 +165,30 @@ export default function App() {
         <ProfileScreen
           totalPoints={totalPoints}
           hiddenGemReviews={hiddenGemReviews}
+          username={authUser}
           onNavigate={handleNavigate}
         />
       );
 
+    case 'Login':
+      return (
+        <LoginScreen
+          onLoginSuccess={handleLoginSuccess}
+          onBack={() => handleNavigate({ name: 'Home' })}
+        />
+      );
+
     default:
-      return <HomeScreen onNavigate={handleNavigate} />;
+      return (
+        <HomeScreen
+          onNavigate={handleNavigate}
+          onLogout={handleLogout}
+          isLoggedIn={authUser !== null}
+          origin={origin}
+          originName={originName}
+          onOriginChange={handleOriginChange}
+        />
+      );
   }
 }
 

@@ -33,6 +33,7 @@ import { colors, fonts } from '../theme';
 import type { AppScreen, Category, Coordinate, Destination } from '../types';
 import CategoryPicker from '../components/CategoryPicker';
 import MapLocationPickerModal from '../components/MapLocationPickerModal';
+import ProfileMenu from '../components/ProfileMenu';
 import {
   CATEGORIES,
   POPULAR_ORIGIN_PRESETS,
@@ -51,14 +52,25 @@ import {
 
 interface Props {
   onNavigate: (screen: AppScreen) => void;
+  onLogout: () => void;
+  isLoggedIn: boolean;
+  origin: Coordinate | null;
+  originName: string;
+  onOriginChange: (coord: Coordinate, name: string) => void;
 }
 
-export default function HomeScreen({ onNavigate }: Props) {
-  // --- Titik Awal ---
-  const [origin, setOrigin] = useState<Coordinate | null>({ lat: -8.7184, lng: 115.1686 }); // Default Kuta
-  const [originName, setOriginName] = useState('Kuta Central');
+export default function HomeScreen({
+  onNavigate,
+  onLogout,
+  isLoggedIn,
+  origin,
+  originName,
+  onOriginChange,
+}: Props) {
+  // --- Titik Awal (state disimpan di App) ---
   const [gpsLoading, setGpsLoading] = useState(false);
   const [showOriginMapModal, setShowOriginMapModal] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   // --- Waktu Saat Ini (Real-time) ---
   const currentTimeSlot = useMemo(() => getCurrentTimeSlot(), []);
@@ -89,13 +101,14 @@ export default function HomeScreen({ onNavigate }: Props) {
         accuracy: Location.Accuracy.Balanced,
       });
       const coord = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-      setOrigin(coord);
       const nearest = findNearestDestination(coord);
-      setOriginName(`Lokasi Saat Ini (${nearest.district})`);
+      onOriginChange(coord, `Lokasi Saat Ini (${nearest.district})`);
     } catch {
       // Fallback simulasi GPS jika tidak tersedia
-      setOrigin({ lat: -8.7482, lng: 115.1672 });
-      setOriginName('Bandara Ngurah Rai (Simulasi GPS)');
+      onOriginChange(
+        { lat: -8.7482, lng: 115.1672 },
+        'Bandara Ngurah Rai (Simulasi GPS)'
+      );
       Alert.alert(
         'GPS Perangkat Terbatas',
         'Menggunakan lokasi simulasi Bali (Bandara Ngurah Rai). Anda juga bisa memilih dari peta.'
@@ -103,12 +116,11 @@ export default function HomeScreen({ onNavigate }: Props) {
     } finally {
       setGpsLoading(false);
     }
-  }, []);
+  }, [onOriginChange]);
 
   // ── Pilih Preset Origin ───────────────────────────────────────────────
   const handleOriginPreset = (preset: { name: string; lat: number; lng: number }) => {
-    setOrigin({ lat: preset.lat, lng: preset.lng });
-    setOriginName(preset.name);
+    onOriginChange({ lat: preset.lat, lng: preset.lng }, preset.name);
   };
 
   // ── Toggle Tambah/Hapus Destinasi ─────────────────────────────────────
@@ -172,6 +184,17 @@ export default function HomeScreen({ onNavigate }: Props) {
 
   // ── Submit & Cari Rute + Rekomendasi Cerdas ───────────────────────────
   const handleSearchRoute = useCallback(async () => {
+    if (!isLoggedIn) {
+      Alert.alert(
+        'Login Diperlukan',
+        'Silakan login terlebih dahulu untuk mencari rute dan rekomendasi wisata.',
+        [
+          { text: 'Nanti', style: 'cancel' },
+          { text: 'Login', onPress: () => onNavigate({ name: 'Login' }) },
+        ]
+      );
+      return;
+    }
     if (!origin) {
       Alert.alert('Peringatan', 'Silakan tentukan titik awal keberangkatan Anda.');
       return;
@@ -204,7 +227,7 @@ export default function HomeScreen({ onNavigate }: Props) {
     } finally {
       setSearchingRoute(false);
     }
-  }, [origin, originName, selectedDestinations, onNavigate]);
+  }, [isLoggedIn, origin, originName, selectedDestinations, onNavigate]);
 
   return (
     <View style={styles.root}>
@@ -214,11 +237,11 @@ export default function HomeScreen({ onNavigate }: Props) {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.appName}>Lokayana AI</Text>
-          <Text style={styles.appSub}>Navigasi Cerdas & Rekomendasi Wisata Bali</Text>
+          <Text style={styles.appSub}>Wisata Bali</Text>
         </View>
         <TouchableOpacity
           style={styles.profileBtn}
-          onPress={() => onNavigate({ name: 'Profile' })}
+          onPress={() => setShowProfileMenu(true)}
           activeOpacity={0.8}
         >
           <Ionicons name="person-circle-outline" size={32} color={colors.turmeric} />
@@ -252,12 +275,9 @@ export default function HomeScreen({ onNavigate }: Props) {
           {origin ? (
             <View style={styles.locationBadge}>
               <Ionicons name="navigate-circle" size={20} color="#2563EB" />
-              <View style={styles.locationBadgeTextWrap}>
-                <Text style={styles.locationBadgeName}>{originName}</Text>
-                <Text style={styles.locationBadgeCoord}>
-                  📍 Titik keberangkatan siap
-                </Text>
-              </View>
+              <Text style={styles.locationBadgeName} numberOfLines={1}>
+                {originName}
+              </Text>
             </View>
           ) : (
             <Text style={styles.emptyHint}>Pilih titik keberangkatan Anda</Text>
@@ -322,15 +342,6 @@ export default function HomeScreen({ onNavigate }: Props) {
           </ScrollView>
         </View>
 
-        {/* ── PANAH PENGHUBUNG ── */}
-        <View style={styles.arrowRow}>
-          <View style={styles.arrowLine} />
-          <View style={styles.arrowCircle}>
-            <Ionicons name="arrow-down" size={16} color={colors.sea} />
-          </View>
-          <View style={styles.arrowLine} />
-        </View>
-
         {/* ── CARD 2: TEMPAT WISATA TUJUAN (MULTI-DESTINASI) ── */}
         <View style={styles.card}>
           <View style={styles.cardHeaderBetween}>
@@ -371,29 +382,16 @@ export default function HomeScreen({ onNavigate }: Props) {
                       <Text style={styles.selectedDestName} numberOfLines={1}>
                         {dest.name}
                       </Text>
-                      <Text style={styles.selectedDestMeta}>
-                        {dest.category} • {dest.district} • ★ {dest.rating.toFixed(1)}
+                      <Text style={styles.selectedDestMeta} numberOfLines={1}>
+                        {dest.category} • ★ {dest.rating.toFixed(1)} • {timing.icon}{' '}
+                        {timing.best_time}
                       </Text>
-                      <View style={styles.destTimingBadge}>
-                        <Text style={styles.destTimingText}>
-                          {timing.icon} Waktu Terbaik: {timing.best_time} ({timing.window})
-                        </Text>
-                      </View>
-                      {/* ── Badge Status Waktu Nyata ── */}
-                      <View style={[styles.timingStatusBadge, { borderColor: timingStatus.color, backgroundColor: timingStatus.color + '18' }]}>
-                        <Text style={[styles.timingStatusText, { color: timingStatus.color }]}>
-                          {timingStatus.icon} {timingStatus.label}
-                        </Text>
-                      </View>
-                      {/* ── Warning jika waktu sudah lewat ── */}
-                      {timingStatus.isPassed && (
-                        <View style={styles.timingWarningRow}>
-                          <Ionicons name="alert-circle" size={13} color="#DC2626" />
-                          <Text style={styles.timingWarningText}>
-                            Waktu kunjungan kurang ideal hari ini — tetap bisa dikunjungi
-                          </Text>
-                        </View>
-                      )}
+                      <Text
+                        style={[styles.selectedDestStatus, { color: timingStatus.color }]}
+                        numberOfLines={1}
+                      >
+                        {timingStatus.icon} {timingStatus.label}
+                      </Text>
                     </View>
                     <TouchableOpacity
                       style={styles.destRemoveBtn}
@@ -471,15 +469,14 @@ export default function HomeScreen({ onNavigate }: Props) {
                       <Text style={styles.resultName} numberOfLines={1}>
                         {item.name}
                       </Text>
-                      <Text style={styles.resultMeta}>
-                        {item.category} • {item.district} • ★ {item.rating.toFixed(1)}
+                      <Text style={styles.resultMeta} numberOfLines={1}>
+                        {item.category} • ★ {item.rating.toFixed(1)}
                       </Text>
-                      <Text style={styles.resultTimingText}>
-                        {itemTiming.icon} Best: {itemTiming.best_time} ({itemTiming.window})
-                      </Text>
-                      {/* Badge status waktu nyata di hasil pencarian */}
-                      <Text style={[styles.resultTimingStatus, { color: itemStatus.color }]}>
-                        {itemStatus.icon} {itemStatus.label}
+                      <Text
+                        style={[styles.resultTimingStatus, { color: itemStatus.color }]}
+                        numberOfLines={1}
+                      >
+                        {itemTiming.icon} {itemTiming.best_time} • {itemStatus.label}
                       </Text>
                     </View>
                     <View
@@ -563,16 +560,11 @@ export default function HomeScreen({ onNavigate }: Props) {
           )}
         </View>
 
-        {/* ── CARD 3: ATURAN RADIUS 15 KM (INFO BANNER) ── */}
+        {/* ── Info Radius Ringkas ── */}
         <View style={styles.radiusRuleCard}>
-          <View style={styles.radiusRuleHeader}>
-            <Ionicons name="shield-checkmark" size={18} color={colors.turmericDark} />
-            <Text style={styles.radiusRuleTitle}>Logika Radius Cerdas (15 km)</Text>
-          </View>
-          <Text style={styles.radiusRuleDesc}>
-            • <Text style={styles.boldText}>Jarak {'>'} 15 km:</Text> Sistem mencari alternatif di <Text style={styles.boldText}>2 radius</Text> (15 km dari titik awal & 15 km dari destinasi).{'\n'}
-            • <Text style={styles.boldText}>Jarak ≤ 15 km:</Text> Sistem menggabungkannya ke dalam <Text style={styles.boldText}>1 radius</Text> (15 km).{'\n'}
-            • <Text style={styles.boldText}>Multi-Destinasi:</Text> Mengoptimalkan urutan rute dengan <Text style={styles.boldText}>Time-Aware A* TSP</Text> (jarak terpendek + waktu kunjungan terbaik).
+          <Ionicons name="shield-checkmark" size={15} color={colors.turmericDark} />
+          <Text style={styles.radiusRuleCompactText}>
+            Alternatif dicari dalam radius 15 km dan diurutkan sesuai waktu terbaik.
           </Text>
         </View>
 
@@ -594,12 +586,12 @@ export default function HomeScreen({ onNavigate }: Props) {
           )}
           <Text style={styles.submitBtnText}>
             {searchingRoute
-              ? 'Menghitung Rute Optimal & AI…'
+              ? 'Menghitung rute…'
               : selectedDestinations.length > 1
-              ? `Rencanakan Rute Optimal (${selectedDestinations.length} Destinasi)`
+              ? `Cari Rute (${selectedDestinations.length} Destinasi)`
               : selectedDestinations.length === 1
-              ? 'Cari Rute & Alternatif Cerdas (1 Destinasi)'
-              : 'Pilih Destinasi Terlebih Dahulu'}
+              ? 'Cari Rute & Alternatif'
+              : 'Pilih Destinasi Dulu'}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -610,8 +602,7 @@ export default function HomeScreen({ onNavigate }: Props) {
         title="Pilih Titik Awal di Peta"
         initialCoord={origin}
         onSelect={(coord, name) => {
-          setOrigin(coord);
-          setOriginName(name);
+          onOriginChange(coord, name);
         }}
         onClose={() => setShowOriginMapModal(false)}
       />
@@ -630,6 +621,24 @@ export default function HomeScreen({ onNavigate }: Props) {
           handleToggleDestination(nearest);
         }}
         onClose={() => setShowDestMapModal(false)}
+      />
+
+      <ProfileMenu
+        visible={showProfileMenu}
+        isLoggedIn={isLoggedIn}
+        onClose={() => setShowProfileMenu(false)}
+        onViewProfile={() => {
+          setShowProfileMenu(false);
+          onNavigate({ name: 'Profile' });
+        }}
+        onLogin={() => {
+          setShowProfileMenu(false);
+          onNavigate({ name: 'Login' });
+        }}
+        onLogout={() => {
+          setShowProfileMenu(false);
+          onLogout();
+        }}
       />
     </View>
   );
@@ -651,7 +660,7 @@ const styles = StyleSheet.create({
   appSub: { fontFamily: fonts.medium, fontSize: 13, color: colors.mist, marginTop: 2 },
   profileBtn: { padding: 4 },
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 40 },
+  scrollContent: { padding: 16, paddingBottom: 40, gap: 16 },
   card: {
     backgroundColor: colors.paper,
     borderRadius: 18,
@@ -744,6 +753,11 @@ const styles = StyleSheet.create({
     color: colors.muted,
     marginTop: 1,
   },
+  selectedDestStatus: {
+    fontFamily: fonts.bold,
+    fontSize: 10,
+    marginTop: 2,
+  },
   destRemoveBtn: { padding: 4 },
   locationBadge: {
     flexDirection: 'row',
@@ -757,7 +771,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   locationBadgeTextWrap: { flex: 1 },
-  locationBadgeName: { fontFamily: fonts.bold, fontSize: 14, color: colors.ink },
+  locationBadgeName: { flex: 1, fontFamily: fonts.bold, fontSize: 14, color: colors.ink },
   locationBadgeCoord: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, marginTop: 1 },
   emptyHint: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginBottom: 12 },
   originActionRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
@@ -905,12 +919,22 @@ const styles = StyleSheet.create({
   },
   highlightCategory: { fontFamily: fonts.regular, fontSize: 10, color: colors.muted },
   radiusRuleCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     backgroundColor: colors.turmericLight,
-    borderRadius: 14,
-    padding: 14,
-    marginTop: 14,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: 'rgba(244, 180, 26, 0.4)',
+  },
+  radiusRuleCompactText: {
+    flex: 1,
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    color: colors.ink,
+    lineHeight: 16,
   },
   radiusRuleHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   radiusRuleTitle: { fontFamily: fonts.bold, fontSize: 13, color: colors.ink },
@@ -924,7 +948,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.turmeric,
     paddingVertical: 15,
     borderRadius: 14,
-    marginTop: 16,
     elevation: 3,
     shadowColor: '#000',
     shadowOpacity: 0.15,

@@ -72,9 +72,7 @@ export default function FastestRouteCard({ route, origin, destination, stops }: 
           <View style={styles.itineraryHeaderRow}>
             <Ionicons name="time-outline" size={15} color={colors.sea} />
             <Text style={styles.itineraryTitle}>
-              {hasMultipleStops
-                ? 'Jadwal Urutan Kunjungan Optimal (Time-Aware A* TSP)'
-                : 'Waktu Kunjungan Terbaik'}
+              {hasMultipleStops ? 'Jadwal Kunjungan' : 'Waktu Kunjungan Terbaik'}
             </Text>
           </View>
 
@@ -113,18 +111,6 @@ export default function FastestRouteCard({ route, origin, destination, stops }: 
                       </Text>
                     </View>
                   </View>
-                  <Text style={styles.timingReasonText} numberOfLines={2}>
-                    💡 {timing.reason}
-                  </Text>
-                  {/* Warning banner jika waktu sudah lewat */}
-                  {timingStatus.isPassed && (
-                    <View style={styles.timingPassedWarning}>
-                      <Ionicons name="alert-circle" size={12} color="#DC2626" />
-                      <Text style={styles.timingPassedWarningText}>
-                        Waktu terbaik sudah lewat — tetap bisa dikunjungi
-                      </Text>
-                    </View>
-                  )}
                 </View>
               </View>
             );

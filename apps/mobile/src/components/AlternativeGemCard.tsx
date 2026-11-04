@@ -180,7 +180,8 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    marginBottom: 14,
+    marginHorizontal: 16,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: colors.line,
     overflow: 'hidden',
@@ -194,7 +195,7 @@ const styles = StyleSheet.create({
   photoContainer: {
     position: 'relative',
     width: '100%',
-    height: 160,
+    height: 120,
     backgroundColor: colors.mist,
   },
   photo: {
@@ -247,7 +248,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   body: {
-    padding: 14,
+    padding: 12,
   },
   reasonRow: {
     flexDirection: 'row',

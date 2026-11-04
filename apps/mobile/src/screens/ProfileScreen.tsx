@@ -11,10 +11,16 @@ import type { AppScreen } from '../types';
 interface Props {
   totalPoints: number;
   hiddenGemReviews: number;
+  username: string | null;
   onNavigate: (screen: AppScreen) => void;
 }
 
-export default function ProfileScreen({ totalPoints, hiddenGemReviews, onNavigate }: Props) {
+export default function ProfileScreen({
+  totalPoints,
+  hiddenGemReviews,
+  username,
+  onNavigate,
+}: Props) {
   // Tentukan badge yang sudah diraih berdasarkan jumlah ulasan
   const earnedBadges = ALL_BADGES.filter((b) => hiddenGemReviews >= b.minReviews);
   const nextBadge = ALL_BADGES.find((b) => hiddenGemReviews < b.minReviews);
@@ -42,8 +48,10 @@ export default function ProfileScreen({ totalPoints, hiddenGemReviews, onNavigat
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>🧭</Text>
           </View>
-          <Text style={styles.heroName}>Penjelajah Bali</Text>
-          <Text style={styles.heroSub}>Bergabung sebagai Penjelajah Permata</Text>
+          <Text style={styles.heroName}>{username ?? 'Tamu'}</Text>
+          <Text style={styles.heroSub}>
+            {username ? 'Penjelajah Permata' : 'Belum login — mode tamu'}
+          </Text>
 
           {/* Total poin */}
           <View style={styles.pointsBadge}>
@@ -146,7 +154,7 @@ const styles = StyleSheet.create({
   backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
   navTitle: { flex: 1, fontFamily: fonts.bold, fontSize: 18, color: colors.white, textAlign: 'center' },
 
-  content: { padding: 16, gap: 12 },
+  content: { padding: 16, paddingBottom: 32, gap: 16 },
 
   // Hero card
   heroCard: {
