@@ -30,14 +30,23 @@ import type { AppScreen, RecommendationResponse, AlternativeDestination } from '
 import FastestRouteCard from '../components/FastestRouteCard';
 import { AlternativeGemCard } from '../components/AlternativeGemCard';
 import DestinationDetailModal from '../components/DestinationDetailModal';
+import ProfileMenu from '../components/ProfileMenu';
 
 interface Props {
   params: RecommendationResponse;
   onNavigate: (screen: AppScreen) => void;
+  onLogout: () => void;
+  isLoggedIn: boolean;
   onSwitchDestination?: (gem: AlternativeDestination) => void;
 }
 
-export default function GemListScreen({ params, onNavigate, onSwitchDestination }: Props) {
+export default function GemListScreen({
+  params,
+  onNavigate,
+  onLogout,
+  isLoggedIn,
+  onSwitchDestination,
+}: Props) {
   const {
     origin,
     destination,
@@ -61,6 +70,7 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
   const [activeFilterTab, setActiveFilterTab] = useState<'ALL' | 'DESTINATION' | 'ORIGIN'>('ALL');
   const [isMapLocked, setIsMapLocked] = useState(false);
   const [fullscreenMapVisible, setFullscreenMapVisible] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   // Filter alternatif berdasarkan tab yang dipilih
   const filteredAlternatives = useMemo(() => {
@@ -102,15 +112,13 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
             style={[styles.lockToggleBtn, isMapLocked && styles.lockToggleBtnActive]}
             onPress={() => setIsMapLocked((prev) => !prev)}
             activeOpacity={0.8}
+            accessibilityLabel={isMapLocked ? 'Kunci peta aktif' : 'Aktifkan geser peta'}
           >
             <Ionicons
               name={isMapLocked ? 'lock-closed' : 'hand-left-outline'}
-              size={15}
+              size={16}
               color={isMapLocked ? '#FFFFFF' : colors.sea}
             />
-            <Text style={[styles.lockToggleText, isMapLocked && styles.lockToggleTextActive]}>
-              {isMapLocked ? 'Mode Geser Peta: AKTIF' : 'Kunci Layar (Geser Peta)'}
-            </Text>
           </TouchableOpacity>
 
           <View style={styles.mapToolbarRight}>
@@ -147,36 +155,6 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
             alternatives={filteredAlternatives}
             onAlternativePress={handlePressCard}
           />
-
-          {/* Active Helper Banner when isMapLocked is TRUE */}
-          {isMapLocked ? (
-            <View style={styles.mapActiveBanner}>
-              <View style={styles.activeDot} />
-              <Text style={styles.mapActiveBannerText}>
-                Layar dikunci — Bebas geser & zoom peta
-              </Text>
-              <TouchableOpacity
-                onPress={() => setIsMapLocked(false)}
-                style={styles.unlockSmallBtn}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.unlockSmallBtnText}>Selesai</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            /* Quick Hitbox Hint when NOT locked */
-            <TouchableOpacity
-              style={styles.mapInactiveHint}
-              onPress={() => setIsMapLocked(true)}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="hand-left-outline" size={13} color={colors.ink} />
-              <Text style={styles.mapInactiveHintText}>
-                Ketuk untuk geser peta tanpa scroll layar
-              </Text>
-              <Ionicons name="chevron-forward" size={12} color={colors.muted} />
-            </TouchableOpacity>
-          )}
         </View>
       </View>
 
@@ -188,28 +166,19 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
         stops={effectiveStops}
       />
 
-      {/* ── Radius Mode Status Card ── */}
+      {/* ── Status Rute Ringkas ── */}
       <View style={styles.radiusStatusBox}>
-        <View style={styles.radiusStatusHeader}>
-          <Ionicons
-            name={isDualRadius ? 'git-network-outline' : 'radio-outline'}
-            size={18}
-            color={colors.sea}
-          />
-          <Text style={styles.radiusStatusTitle}>
-            {isMultiStop
-              ? `Rute Multi-Destinasi: ${effectiveStops.length} Tempat Wisata`
-              : isDualRadius
-              ? `Mode 2 Radius: Jarak ${straightDistanceKm} km (> 15 km)`
-              : `Mode 1 Radius: Jarak ${straightDistanceKm} km (≤ 15 km)`}
-          </Text>
-        </View>
-        <Text style={styles.radiusStatusDesc}>
+        <Ionicons
+          name={isDualRadius ? 'git-network-outline' : 'radio-outline'}
+          size={16}
+          color={colors.sea}
+        />
+        <Text style={styles.radiusStatusTitle}>
           {isMultiStop
-            ? `Sistem menyusun urutan rute tercepat (Greedy TSP) dan memetakan zona 15 km di setiap titik destinasi.`
+            ? `${effectiveStops.length} destinasi • urut sesuai waktu terbaik`
             : isDualRadius
-            ? `Karena jarak di atas 15 km, sistem mencari alternatif di 2 radius 15 km (dekat Titik Awal dan dekat Destinasi Tujuan).`
-            : `Karena jarak di bawah 15 km, sistem menggabungkan pencarian dalam 1 radius 15 km di sekitar destinasi.`}
+            ? `${straightDistanceKm} km • 2 radius`
+            : `${straightDistanceKm} km • 1 radius`}
         </Text>
       </View>
 
@@ -265,10 +234,8 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
 
       {/* ── Section Title ── */}
       <View style={styles.listTitleWrap}>
-        <Text style={styles.listTitle}>Rekomendasi Alternatif Serupa</Text>
-        <Text style={styles.listSub}>
-          Disaring berdasarkan kemiripan vibe, rating tinggi, dan berada dalam radius 15 km
-        </Text>
+        <Text style={styles.listTitle}>Alternatif Terdekat</Text>
+        <Text style={styles.listSub}>Paling mirip di radius 15 km</Text>
       </View>
     </View>
   );
@@ -292,11 +259,11 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
               ? `${origin.name} → ${effectiveStops.length} Destinasi`
               : `${origin.name} → ${destination.name}`}
           </Text>
-          <Text style={styles.navSub}>Rute Optimal & Rekomendasi Terkait</Text>
+          <Text style={styles.navSub}>Rute & rekomendasi</Text>
         </View>
         <TouchableOpacity
           style={styles.profileBtn}
-          onPress={() => onNavigate({ name: 'Profile' })}
+          onPress={() => setShowProfileMenu(true)}
         >
           <Ionicons name="person-circle-outline" size={28} color={colors.turmeric} />
         </TouchableOpacity>
@@ -420,6 +387,24 @@ export default function GemListScreen({ params, onNavigate, onSwitchDestination 
           </View>
         </View>
       </Modal>
+
+      <ProfileMenu
+        visible={showProfileMenu}
+        isLoggedIn={isLoggedIn}
+        onClose={() => setShowProfileMenu(false)}
+        onViewProfile={() => {
+          setShowProfileMenu(false);
+          onNavigate({ name: 'Profile' });
+        }}
+        onLogin={() => {
+          setShowProfileMenu(false);
+          onNavigate({ name: 'Login' });
+        }}
+        onLogout={() => {
+          setShowProfileMenu(false);
+          onLogout();
+        }}
+      />
     </View>
   );
 }
@@ -450,7 +435,7 @@ const styles = StyleSheet.create({
   headerContainer: { paddingBottom: 6 },
   mapContainer: {
     backgroundColor: '#FFFFFF',
-    marginBottom: 12,
+    marginBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
   },
@@ -469,12 +454,11 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
   },
   lockToggleBtn: {
-    flexDirection: 'row',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    justifyContent: 'center',
     backgroundColor: '#EFF6F5',
     borderWidth: 1,
     borderColor: colors.sea,
@@ -508,12 +492,12 @@ const styles = StyleSheet.create({
   },
   mapWrap: {
     width: '100%',
-    height: 280,
+    height: 230,
     position: 'relative',
     overflow: 'hidden',
   },
   mapWrapActive: {
-    height: 340,
+    height: 270,
   },
   map: { width: '100%', height: '100%' },
   mapActiveBanner: {
@@ -714,11 +698,15 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
   },
   radiusStatusBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 12,
-    borderRadius: 12,
+    marginBottom: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.line,
   },
@@ -742,7 +730,7 @@ const styles = StyleSheet.create({
   filterTabs: {
     flexDirection: 'row',
     marginHorizontal: 16,
-    marginBottom: 12,
+    marginBottom: 14,
     backgroundColor: '#FFFFFF',
     borderRadius: 10,
     padding: 4,
@@ -768,8 +756,8 @@ const styles = StyleSheet.create({
   },
   listTitleWrap: {
     paddingHorizontal: 16,
-    marginTop: 6,
-    marginBottom: 4,
+    marginTop: 4,
+    marginBottom: 10,
   },
   listTitle: {
     fontFamily: fonts.extraBold,
@@ -782,7 +770,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     marginTop: 2,
   },
-  listContent: { paddingBottom: 32 },
+  listContent: { paddingBottom: 40 },
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',

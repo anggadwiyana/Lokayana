@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
 
   // Scroll
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, gap: 12 },
+  scrollContent: { padding: 16, paddingBottom: 32, gap: 16 },
 
   // Gem info
   gemInfo: {
