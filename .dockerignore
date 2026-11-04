@@ -1,0 +1,10 @@
+.git
+.gitignore
+.venv
+node_modules
+apps/mobile
+.expo
+.idea
+.vscode
+*.log
+
