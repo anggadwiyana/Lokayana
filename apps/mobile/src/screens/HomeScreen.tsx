@@ -151,9 +151,11 @@ export default function HomeScreen({
 
   // ── Hasil Pencarian Live Destinasi (Diprioritaskan sesuai Waktu Kunjungan) ─
   const searchResults = useMemo(() => {
-    // Tampilkan hasil jika ada query ATAU kategori spesifik dipilih (bukan "Semua" tanpa query)
-    const isSemua = selectedCategory?.name === 'Semua';
-    if (!searchQuery.trim() && (!selectedCategory || isSemua)) return [];
+    // Tampilkan hasil jika:
+    // - Ada query pencarian, ATAU
+    // - Kategori spesifik dipilih (termasuk "Semua" — semua destinasi ditampilkan dalam hitbox)
+    // Hanya kosong kalau tidak ada query DAN tidak ada kategori dipilih sama sekali
+    if (!searchQuery.trim() && !selectedCategory) return [];
     const results = searchDestinations(searchQuery, selectedCategory?.name);
     return [...results]
       .sort((a, b) => {

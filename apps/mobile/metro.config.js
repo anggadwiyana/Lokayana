@@ -15,12 +15,25 @@ const config = getDefaultConfig(projectRoot);
 //   "TypeError: property is not writable" (iOS Hermes)
 //   "main has not been registered"
 //
-// Blokir paket-paket kritis dari root agar Metro tidak memuatnya dua kali.
-// blockList menerima satu RegExp yang match path yang ingin diblokir.
-const escapedRoot = rootNodeModules.replace(/\\/g, '\\\\').replace(/\./g, '\\.');
-config.resolver.blockList = new RegExp(
-  `^${escapedRoot}\\\\(react|react-native|react-dom|scheduler|expo)($|\\\\.*)`
-);
+// STRATEGI: gunakan custom resolver filter via "resolveRequest" override
+// Ini lebih andal dari blockList di Windows karena tidak bergantung pada path separator
+const blockedPackages = new Set(['react', 'react-native', 'react-dom', 'scheduler', 'expo']);
+
+// Normalize path: lowercase + ganti semua \ jadi /
+function normalizePath(p) {
+  return p.toLowerCase().replace(/\\/g, '/');
+}
+
+const normalizedRootNodeModules = normalizePath(rootNodeModules);
+const normalizedMobileNodeModules = normalizePath(path.resolve(projectRoot, 'node_modules'));
+
+// blockList sebagai fallback (case-insensitive, handle / dan \)
+const escapedParts = rootNodeModules
+  .split(/[/\\]/)
+  .map(part => part.replace(/[.+^${}()|[\]*?]/g, '\\$&'));
+const escapedRoot = escapedParts.join('[/\\\\]');
+const blockPattern = `^${escapedRoot}[/\\\\](react|react-native|react-dom|scheduler|expo)([/\\\\].*)?$`;
+config.resolver.blockList = new RegExp(blockPattern, 'i'); // flag 'i' = case-insensitive
 
 // Paksa resolver hanya cari di apps/mobile/node_modules
 config.resolver.nodeModulesPaths = [
