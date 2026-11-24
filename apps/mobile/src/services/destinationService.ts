@@ -4,6 +4,7 @@ import rawDestinations from '../data/baliDestinations.json';
 const allDestinations: Destination[] = rawDestinations as Destination[];
 
 export const CATEGORIES: Category[] = [
+  { id: 0, name: 'Semua', icon: '🗺️', description: 'Tampilkan semua kategori wisata Bali' },
   { id: 1, name: 'Pantai', icon: '🏖️', description: 'Pantai pasir putih, selancar, dan panorama sunset' },
   { id: 2, name: 'Pura', icon: '🛕', description: 'Pura sakral bernilai sejarah dan arsitektur khas Bali' },
   { id: 3, name: 'Patung & Monumen', icon: '🗿', description: 'Ikon megah, patung peradaban, dan monumen budaya' },

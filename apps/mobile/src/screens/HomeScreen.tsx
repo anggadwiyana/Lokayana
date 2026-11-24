@@ -82,7 +82,7 @@ export default function HomeScreen({
 
   // --- Search & Kategori ---
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<Category | null>(CATEGORIES[0]); // Default Pantai
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(CATEGORIES[0]); // Default Semua
   const [searchingRoute, setSearchingRoute] = useState(false);
 
   // ── GPS Handler ────────────────────────────────────────────────────────
@@ -148,7 +148,9 @@ export default function HomeScreen({
 
   // ── Hasil Pencarian Live Destinasi (Diprioritaskan sesuai Waktu Kunjungan) ─
   const searchResults = useMemo(() => {
-    if (!searchQuery.trim() && !selectedCategory) return [];
+    // Tampilkan hasil jika ada query ATAU kategori spesifik dipilih (bukan "Semua" tanpa query)
+    const isSemua = selectedCategory?.name === 'Semua';
+    if (!searchQuery.trim() && (!selectedCategory || isSemua)) return [];
     const results = searchDestinations(searchQuery, selectedCategory?.name);
     return [...results]
       .sort((a, b) => {
@@ -445,6 +447,8 @@ export default function HomeScreen({
               <Text style={styles.searchResultTitle}>
                 {searchQuery
                   ? `Hasil Pencarian "${searchQuery}" (${searchResults.length})`
+                  : selectedCategory?.name === 'Semua'
+                  ? `Semua Wisata Bali (${searchResults.length})`
                   : `Wisata Kategori ${selectedCategory?.name} (${searchResults.length})`}
               </Text>
               {searchResults.map((item) => {
