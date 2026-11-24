@@ -13,13 +13,12 @@
  *    - Quick add dari Rekomendasi Unggulan Bali atau Peta Interaktif
  * 3. Navigasi menuju kalkulasi Rute Tercepat (A* TSP & OSRM via Python Backend) & Rekomendasi Cerdas (Radius 15 km)
  */
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  FlatList,
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
@@ -86,6 +85,9 @@ export default function HomeScreen({
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(CATEGORIES[0]); // Default Semua
   const [searchingRoute, setSearchingRoute] = useState(false);
 
+  // --- Hitbox: control outer scroll when inside destination list ---
+  const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
+
   // ── GPS Handler ────────────────────────────────────────────────────────
   const handleGetGPS = useCallback(async () => {
     setGpsLoading(true);
@@ -149,20 +151,20 @@ export default function HomeScreen({
 
   // ── Hasil Pencarian Live Destinasi (Diprioritaskan sesuai Waktu Kunjungan) ─
   const searchResults = useMemo(() => {
-    // Selalu tampilkan hasil — baik ada query, ada kategori, maupun "Semua"
-    if (!searchQuery.trim() && !selectedCategory) return [];
+    // Tampilkan hasil jika ada query ATAU kategori spesifik dipilih (bukan "Semua" tanpa query)
+    const isSemua = selectedCategory?.name === 'Semua';
+    if (!searchQuery.trim() && (!selectedCategory || isSemua)) return [];
     const results = searchDestinations(searchQuery, selectedCategory?.name);
-    // Urutkan: Ideal sekarang → Upcoming → Sudah lewat
-    return [...results].sort((a, b) => {
-      const tA = getDestinationBestTiming(a);
-      const tB = getDestinationBestTiming(b);
-      const sA = getTimingStatus(tA.best_time);
-      const sB = getTimingStatus(tB.best_time);
-      const scoreA = sA.isIdeal ? 2 : sA.isPassed ? 0 : 1;
-      const scoreB = sB.isIdeal ? 2 : sB.isPassed ? 0 : 1;
-      return scoreB - scoreA;
-    });
-    // Tidak ada slice — tampilkan SEMUA hasil
+    return [...results]
+      .sort((a, b) => {
+        const tA = getDestinationBestTiming(a);
+        const tB = getDestinationBestTiming(b);
+        const sA = getTimingStatus(tA.best_time);
+        const sB = getTimingStatus(tB.best_time);
+        const scoreA = sA.isIdeal ? 2 : sA.isPassed ? 0 : 1;
+        const scoreB = sB.isIdeal ? 2 : sB.isPassed ? 0 : 1;
+        return scoreB - scoreA;
+      });
   }, [searchQuery, selectedCategory]);
 
   // Rekomendasi Unggulan yang memprioritaskan destinasi sesuai jam saat ini
@@ -231,70 +233,11 @@ export default function HomeScreen({
     }
   }, [isLoggedIn, origin, originName, selectedDestinations, onNavigate]);
 
-  // ── Data untuk FlatList: search results ATAU popular highlights ──────
-  const listData = useMemo<Destination[]>(() => {
-    if (searchResults.length > 0) return searchResults;
-    return timeAwareHighlights;
-  }, [searchResults, timeAwareHighlights]);
-
-  // ── Label header list ─────────────────────────────────────────────────
-  const listHeaderLabel = useMemo(() => {
-    if (searchResults.length > 0) {
-      if (searchQuery)
-        return `Hasil Pencarian "${searchQuery}" (${searchResults.length})`;
-      if (selectedCategory?.name === 'Semua')
-        return `Semua Wisata Bali (${searchResults.length})`;
-      return `Wisata Kategori ${selectedCategory?.name} (${searchResults.length})`;
-    }
-    return 'Rekomendasi Populer Bali';
-  }, [searchResults, searchQuery, selectedCategory]);
-
-  // ── Render satu baris destinasi ───────────────────────────────────────
-  const renderDestItem = useCallback(
-    ({ item }: { item: Destination }) => {
-      const isSelected = selectedIdSet.has(item.id);
-      const timing = getDestinationBestTiming(item);
-      const status = getTimingStatus(timing.best_time);
-      return (
-        <TouchableOpacity
-          style={[styles.resultRow, isSelected && styles.resultRowSelected]}
-          onPress={() => handleToggleDestination(item)}
-          activeOpacity={0.7}
-        >
-          <Image
-            source={{ uri: getDestinationImageUrl(item.imageUrl, item.category) }}
-            style={styles.resultThumb}
-          />
-          <View style={styles.resultInfo}>
-            <Text style={styles.resultName} numberOfLines={1}>{item.name}</Text>
-            <Text style={styles.resultMeta} numberOfLines={1}>
-              {item.category} • ★ {item.rating.toFixed(1)}
-            </Text>
-            <Text style={[styles.resultTimingStatus, { color: status.color }]} numberOfLines={1}>
-              {timing.icon} {timing.best_time} • {status.label}
-            </Text>
-          </View>
-          <View style={[styles.toggleAddBadge, isSelected && styles.toggleAddBadgeSelected]}>
-            <Ionicons
-              name={isSelected ? 'checkmark' : 'add'}
-              size={15}
-              color={isSelected ? '#FFFFFF' : colors.sea}
-            />
-            <Text style={[styles.toggleAddText, isSelected && styles.toggleAddTextSelected]}>
-              {isSelected ? 'Dipilih' : 'Tambah'}
-            </Text>
-          </View>
-        </TouchableOpacity>
-      );
-    },
-    [selectedIdSet, handleToggleDestination]
-  );
-
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
 
-      {/* ── Header (fixed, luar FlatList) ── */}
+      {/* ── Header ── */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.appName}>Lokayana AI</Text>
@@ -309,7 +252,7 @@ export default function HomeScreen({
         </TouchableOpacity>
       </View>
 
-      {/* ── Banner Waktu Saat Ini (fixed) ── */}
+      {/* ── Banner Waktu Saat Ini ── */}
       <View style={styles.timeBanner}>
         <Ionicons name="time-outline" size={14} color="#1D4ED8" />
         <Text style={styles.timeBannerText}>
@@ -320,226 +263,360 @@ export default function HomeScreen({
         </Text>
       </View>
 
-      {/* ── FlatList Tunggal: tidak ada nested scroll ── */}
-      <FlatList
+      <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        data={listData}
-        keyExtractor={(item) => item.id}
-        renderItem={renderDestItem}
-        ListHeaderComponent={
-          <>
-            {/* ── CARD 1: TITIK LOKASI AWAL ── */}
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <View style={[styles.dot, { backgroundColor: '#3B82F6' }]} />
-                <Text style={styles.cardTitle}>1. Titik Awal Keberangkatan</Text>
-              </View>
+        scrollEnabled={outerScrollEnabled}
+      >
+        {/* ── CARD 1: TITIK LOKASI AWAL ── */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={[styles.dot, { backgroundColor: '#3B82F6' }]} />
+            <Text style={styles.cardTitle}>1. Titik Awal Keberangkatan</Text>
+          </View>
 
-              {origin ? (
-                <View style={styles.locationBadge}>
-                  <Ionicons name="navigate-circle" size={20} color="#2563EB" />
-                  <Text style={styles.locationBadgeName} numberOfLines={1}>
-                    {originName}
-                  </Text>
-                </View>
+          {origin ? (
+            <View style={styles.locationBadge}>
+              <Ionicons name="navigate-circle" size={20} color="#2563EB" />
+              <Text style={styles.locationBadgeName} numberOfLines={1}>
+                {originName}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.emptyHint}>Pilih titik keberangkatan Anda</Text>
+          )}
+
+          {/* Tombol Opsi Lokasi Awal */}
+          <View style={styles.originActionRow}>
+            {/* GPS Saat Ini */}
+            <TouchableOpacity
+              style={styles.gpsBtn}
+              onPress={handleGetGPS}
+              disabled={gpsLoading}
+              activeOpacity={0.85}
+            >
+              {gpsLoading ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Text style={styles.emptyHint}>Pilih titik keberangkatan Anda</Text>
+                <Ionicons name="locate" size={16} color="#FFFFFF" />
               )}
+              <Text style={styles.gpsBtnText}>
+                {gpsLoading ? 'Membaca GPS…' : 'Lokasi Saat Ini'}
+              </Text>
+            </TouchableOpacity>
 
-              <View style={styles.originActionRow}>
-                <TouchableOpacity
-                  style={styles.gpsBtn}
-                  onPress={handleGetGPS}
-                  disabled={gpsLoading}
-                  activeOpacity={0.85}
-                >
-                  {gpsLoading ? (
-                    <ActivityIndicator color="#FFFFFF" size="small" />
-                  ) : (
-                    <Ionicons name="locate" size={16} color="#FFFFFF" />
-                  )}
-                  <Text style={styles.gpsBtnText}>
-                    {gpsLoading ? 'Membaca GPS…' : 'Lokasi Saat Ini'}
-                  </Text>
-                </TouchableOpacity>
+            {/* Pilih dari Peta */}
+            <TouchableOpacity
+              style={styles.mapPickBtn}
+              onPress={() => setShowOriginMapModal(true)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="map-outline" size={16} color={colors.sea} />
+              <Text style={styles.mapPickBtnText}>Pilih dari Peta</Text>
+            </TouchableOpacity>
+          </View>
 
-                <TouchableOpacity
-                  style={styles.mapPickBtn}
-                  onPress={() => setShowOriginMapModal(true)}
-                  activeOpacity={0.85}
+          {/* Preset Chips */}
+          <Text style={styles.presetLabel}>Spot Populer Bali:</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.presetScroll}
+          >
+            {POPULAR_ORIGIN_PRESETS.map((p) => (
+              <TouchableOpacity
+                key={p.name}
+                style={[
+                  styles.presetChip,
+                  originName === p.name && styles.presetChipActive,
+                ]}
+                onPress={() => handleOriginPreset(p)}
+              >
+                <Text
+                  style={[
+                    styles.presetText,
+                    originName === p.name && styles.presetTextActive,
+                  ]}
                 >
-                  <Ionicons name="map-outline" size={16} color={colors.sea} />
-                  <Text style={styles.mapPickBtnText}>Pilih dari Peta</Text>
-                </TouchableOpacity>
+                  {p.name.split(' (')[0]}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
+        {/* ── CARD 2: TEMPAT WISATA TUJUAN (MULTI-DESTINASI) ── */}
+        <View style={styles.card}>
+          <View style={styles.cardHeaderBetween}>
+            <View style={styles.cardHeader}>
+              <View style={[styles.dot, { backgroundColor: '#EF4444' }]} />
+              <Text style={styles.cardTitle}>2. Tempat Wisata Tujuan</Text>
+            </View>
+            {selectedDestinations.length > 0 && (
+              <View style={styles.selectedCountBadge}>
+                <Text style={styles.selectedCountText}>
+                  {selectedDestinations.length} Dipilih
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Daftar Destinasi yang Dipilih (Chips / List) */}
+          {selectedDestinations.length > 0 ? (
+            <View style={styles.selectedListContainer}>
+              <View style={styles.selectedHeaderRow}>
+                <Text style={styles.selectedSubTitle}>Rencana Destinasi Kunjungan:</Text>
+                {selectedDestinations.length > 1 && (
+                  <TouchableOpacity onPress={handleClearDestinations}>
+                    <Text style={styles.clearAllText}>Hapus Semua</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
-              <Text style={styles.presetLabel}>Spot Populer Bali:</Text>
+              {selectedDestinations.map((dest, idx) => {
+                const timing = dest.best_timing || getDestinationBestTiming(dest);
+                const timingStatus = getTimingStatus(timing.best_time);
+                return (
+                  <View key={dest.id} style={styles.selectedDestCard}>
+                    <View style={styles.destIndexBadge}>
+                      <Text style={styles.destIndexText}>{idx + 1}</Text>
+                    </View>
+                    <View style={styles.selectedDestInfo}>
+                      <Text style={styles.selectedDestName} numberOfLines={1}>
+                        {dest.name}
+                      </Text>
+                      <Text style={styles.selectedDestMeta} numberOfLines={1}>
+                        {dest.category} • ★ {dest.rating.toFixed(1)} • {timing.icon}{' '}
+                        {timing.best_time}
+                      </Text>
+                      <Text
+                        style={[styles.selectedDestStatus, { color: timingStatus.color }]}
+                        numberOfLines={1}
+                      >
+                        {timingStatus.icon} {timingStatus.label}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.destRemoveBtn}
+                      onPress={() => handleRemoveDestination(dest.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="close-circle" size={20} color={colors.muted} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <Text style={styles.emptyHint}>
+              Pilih satu atau beberapa tempat wisata di bawah atau cari secara spesifik:
+            </Text>
+          )}
+
+          {/* Search Input Bar */}
+          <View style={styles.searchBar}>
+            <Ionicons name="search" size={18} color={colors.muted} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Cari tempat spesifik (cth: Tanah Lot, GWK, Kuta)…"
+              placeholderTextColor={colors.muted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery ? (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={18} color={colors.muted} />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={() => setShowDestMapModal(true)}>
+                <Ionicons name="map-outline" size={18} color={colors.sea} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Kategori Pills */}
+          <Text style={styles.categoryLabel}>Pilih Berdasarkan Kategori:</Text>
+          <CategoryPicker
+            categories={CATEGORIES}
+            selectedId={selectedCategory?.id ?? null}
+            onSelect={(cat) => setSelectedCategory(cat)}
+          />
+
+          {/* Dropdown Live Hasil Pencarian / Kategori */}
+          {searchResults.length > 0 && (
+            <View style={styles.searchResultsContainer}>
+              <Text style={styles.searchResultTitle}>
+                {searchQuery
+                  ? `Hasil Pencarian "${searchQuery}" (${searchResults.length})`
+                  : selectedCategory?.name === 'Semua'
+                  ? `Semua Wisata Bali (${searchResults.length})`
+                  : `Wisata Kategori ${selectedCategory?.name} (${searchResults.length})`}
+              </Text>
+              {/* Hitbox: scroll mandiri, outer page tidak ikut scroll */}
+              <View
+                onTouchStart={() => setOuterScrollEnabled(false)}
+                onTouchEnd={() => setOuterScrollEnabled(true)}
+                onTouchCancel={() => setOuterScrollEnabled(true)}
+              >
+                <ScrollView
+                  style={styles.destHitbox}
+                  nestedScrollEnabled={true}
+                  showsVerticalScrollIndicator={true}
+                  bounces={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {searchResults.map((item) => {
+                    const isSelected = selectedIdSet.has(item.id);
+                    const itemTiming = getDestinationBestTiming(item);
+                    const itemStatus = getTimingStatus(itemTiming.best_time);
+                    return (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={[
+                          styles.searchResultItem,
+                          isSelected && styles.searchResultItemSelected,
+                        ]}
+                        onPress={() => handleToggleDestination(item)}
+                        activeOpacity={0.7}
+                      >
+                        <Image
+                          source={{ uri: getDestinationImageUrl(item.imageUrl, item.category) }}
+                          style={styles.resultThumb}
+                        />
+                        <View style={styles.resultInfo}>
+                          <Text style={styles.resultName} numberOfLines={1}>
+                            {item.name}
+                          </Text>
+                          <Text style={styles.resultMeta} numberOfLines={1}>
+                            {item.category} • ★ {item.rating.toFixed(1)}
+                          </Text>
+                          <Text
+                            style={[styles.resultTimingStatus, { color: itemStatus.color }]}
+                            numberOfLines={1}
+                          >
+                            {itemTiming.icon} {itemTiming.best_time} • {itemStatus.label}
+                          </Text>
+                        </View>
+                        <View
+                          style={[
+                            styles.toggleAddBadge,
+                            isSelected && styles.toggleAddBadgeSelected,
+                          ]}
+                        >
+                          <Ionicons
+                            name={isSelected ? 'checkmark' : 'add'}
+                            size={15}
+                            color={isSelected ? '#FFFFFF' : colors.sea}
+                          />
+                          <Text
+                            style={[
+                              styles.toggleAddText,
+                              isSelected && styles.toggleAddTextSelected,
+                            ]}
+                          >
+                            {isSelected ? 'Dipilih' : 'Tambah'}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+          )}
+
+          {/* Curated Bali Highlights jika belum ada input */}
+          {searchResults.length === 0 && (
+            <View style={styles.highlightsWrap}>
+              <Text style={styles.highlightsTitle}>Rekomendasi Populer Bali:</Text>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.presetScroll}
+                contentContainerStyle={styles.highlightsScroll}
               >
-                {POPULAR_ORIGIN_PRESETS.map((p) => (
-                  <TouchableOpacity
-                    key={p.name}
-                    style={[styles.presetChip, originName === p.name && styles.presetChipActive]}
-                    onPress={() => handleOriginPreset(p)}
-                  >
-                    <Text style={[styles.presetText, originName === p.name && styles.presetTextActive]}>
-                      {p.name.split(' (')[0]}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                {timeAwareHighlights.map((dest) => {
+                  const isSelected = selectedIdSet.has(dest.id);
+                  const destTiming = getDestinationBestTiming(dest);
+                  const destStatus = getTimingStatus(destTiming.best_time);
+                  return (
+                    <TouchableOpacity
+                      key={dest.id}
+                      style={[
+                        styles.highlightCard,
+                        isSelected && styles.highlightCardSelected,
+                      ]}
+                      onPress={() => handleToggleDestination(dest)}
+                      activeOpacity={0.8}
+                    >
+                      <Image
+                        source={{ uri: getDestinationImageUrl(dest.imageUrl, dest.category) }}
+                        style={styles.highlightImg}
+                      />
+                      <Text style={styles.highlightName} numberOfLines={1}>
+                        {dest.name}
+                      </Text>
+                      <View style={styles.highlightBottomRow}>
+                        <Text style={styles.highlightCategory}>{dest.category}</Text>
+                        <Ionicons
+                          name={isSelected ? 'checkmark-circle' : 'add-circle-outline'}
+                          size={18}
+                          color={isSelected ? colors.sea : colors.muted}
+                        />
+                      </View>
+                      <Text
+                        style={[
+                          styles.highlightTimingText,
+                          { color: destStatus.color },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {destTiming.icon} {destStatus.isIdeal ? 'Ideal Sekarang' : destTiming.best_time}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             </View>
+          )}
+        </View>
 
-            {/* ── CARD 2: TEMPAT WISATA TUJUAN ── */}
-            <View style={styles.card}>
-              <View style={styles.cardHeaderBetween}>
-                <View style={styles.cardHeader}>
-                  <View style={[styles.dot, { backgroundColor: '#EF4444' }]} />
-                  <Text style={styles.cardTitle}>2. Tempat Wisata Tujuan</Text>
-                </View>
-                {selectedDestinations.length > 0 && (
-                  <View style={styles.selectedCountBadge}>
-                    <Text style={styles.selectedCountText}>
-                      {selectedDestinations.length} Dipilih
-                    </Text>
-                  </View>
-                )}
-              </View>
+        {/* ── Info Radius Ringkas ── */}
+        <View style={styles.radiusRuleCard}>
+          <Ionicons name="shield-checkmark" size={15} color={colors.turmericDark} />
+          <Text style={styles.radiusRuleCompactText}>
+            Alternatif dicari dalam radius 15 km dan diurutkan sesuai waktu terbaik.
+          </Text>
+        </View>
 
-              {selectedDestinations.length > 0 ? (
-                <View style={styles.selectedListContainer}>
-                  <View style={styles.selectedHeaderRow}>
-                    <Text style={styles.selectedSubTitle}>Rencana Destinasi Kunjungan:</Text>
-                    {selectedDestinations.length > 1 && (
-                      <TouchableOpacity onPress={handleClearDestinations}>
-                        <Text style={styles.clearAllText}>Hapus Semua</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                  {selectedDestinations.map((dest, idx) => {
-                    const timing = dest.best_timing || getDestinationBestTiming(dest);
-                    const timingStatus = getTimingStatus(timing.best_time);
-                    return (
-                      <View key={dest.id} style={styles.selectedDestCard}>
-                        <View style={styles.destIndexBadge}>
-                          <Text style={styles.destIndexText}>{idx + 1}</Text>
-                        </View>
-                        <View style={styles.selectedDestInfo}>
-                          <Text style={styles.selectedDestName} numberOfLines={1}>
-                            {dest.name}
-                          </Text>
-                          <Text style={styles.selectedDestMeta} numberOfLines={1}>
-                            {dest.category} • ★ {dest.rating.toFixed(1)} • {timing.icon}{' '}
-                            {timing.best_time}
-                          </Text>
-                          <Text
-                            style={[styles.selectedDestStatus, { color: timingStatus.color }]}
-                            numberOfLines={1}
-                          >
-                            {timingStatus.icon} {timingStatus.label}
-                          </Text>
-                        </View>
-                        <TouchableOpacity
-                          style={styles.destRemoveBtn}
-                          onPress={() => handleRemoveDestination(dest.id)}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons name="close-circle" size={20} color={colors.muted} />
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })}
-                </View>
-              ) : (
-                <Text style={styles.emptyHint}>
-                  Pilih satu atau beberapa tempat wisata di bawah atau cari secara spesifik:
-                </Text>
-              )}
-
-              {/* Search Input Bar */}
-              <View style={styles.searchBar}>
-                <Ionicons name="search" size={18} color={colors.muted} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Cari tempat spesifik (cth: Tanah Lot, GWK, Kuta)…"
-                  placeholderTextColor={colors.muted}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                />
-                {searchQuery ? (
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <Ionicons name="close-circle" size={18} color={colors.muted} />
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity onPress={() => setShowDestMapModal(true)}>
-                    <Ionicons name="map-outline" size={18} color={colors.sea} />
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              {/* Kategori Pills */}
-              <Text style={styles.categoryLabel}>Pilih Berdasarkan Kategori:</Text>
-              <CategoryPicker
-                categories={CATEGORIES}
-                selectedId={selectedCategory?.id ?? null}
-                onSelect={(cat) => setSelectedCategory(cat)}
-              />
-            </View>
-
-            {/* ── Header kotak destinasi (menyatu dengan list item di bawahnya) ── */}
-            <View style={styles.destListHeader}>
-              <Text style={styles.searchResultTitle}>{listHeaderLabel}</Text>
-              <Text style={styles.searchResultSubtitle}>
-                Diurutkan berdasarkan waktu terbaik kunjungan • Ketuk untuk memilih
-              </Text>
-            </View>
-          </>
-        }
-        ListFooterComponent={
-          <>
-            {/* ── Info Radius Ringkas ── */}
-            <View style={styles.radiusRuleCard}>
-              <Ionicons name="shield-checkmark" size={15} color={colors.turmericDark} />
-              <Text style={styles.radiusRuleCompactText}>
-                Alternatif dicari dalam radius 15 km dan diurutkan sesuai waktu terbaik.
-              </Text>
-            </View>
-
-            {/* ── TOMBOL CARI RUTE & ALTERNATIF ── */}
-            <TouchableOpacity
-              style={[
-                styles.submitBtn,
-                (!origin || selectedDestinations.length === 0 || searchingRoute) &&
-                  styles.submitBtnDisabled,
-              ]}
-              onPress={handleSearchRoute}
-              disabled={!origin || selectedDestinations.length === 0 || searchingRoute}
-              activeOpacity={0.85}
-            >
-              {searchingRoute ? (
-                <ActivityIndicator color={colors.ink} size="small" />
-              ) : (
-                <Ionicons name="compass" size={22} color={colors.ink} />
-              )}
-              <Text style={styles.submitBtnText}>
-                {searchingRoute
-                  ? 'Menghitung rute…'
-                  : selectedDestinations.length > 1
-                  ? `Cari Rute (${selectedDestinations.length} Destinasi)`
-                  : selectedDestinations.length === 1
-                  ? 'Cari Rute & Alternatif'
-                  : 'Pilih Destinasi Dulu'}
-              </Text>
-            </TouchableOpacity>
-          </>
-        }
-      />
+        {/* ── TOMBOL CARI RUTE & ALTERNATIF ── */}
+        <TouchableOpacity
+          style={[
+            styles.submitBtn,
+            (!origin || selectedDestinations.length === 0 || searchingRoute) &&
+              styles.submitBtnDisabled,
+          ]}
+          onPress={handleSearchRoute}
+          disabled={!origin || selectedDestinations.length === 0 || searchingRoute}
+          activeOpacity={0.85}
+        >
+          {searchingRoute ? (
+            <ActivityIndicator color={colors.ink} size="small" />
+          ) : (
+            <Ionicons name="compass" size={22} color={colors.ink} />
+          )}
+          <Text style={styles.submitBtnText}>
+            {searchingRoute
+              ? 'Menghitung rute…'
+              : selectedDestinations.length > 1
+              ? `Cari Rute (${selectedDestinations.length} Destinasi)`
+              : selectedDestinations.length === 1
+              ? 'Cari Rute & Alternatif'
+              : 'Pilih Destinasi Dulu'}
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
 
       {/* Modal Picker Titik Awal dari Peta */}
       <MapLocationPickerModal
@@ -792,39 +869,8 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     overflow: 'hidden',
   },
-  // Header kotak destinasi di atas FlatList items
-  destListHeader: {
-    marginHorizontal: 16,
-    marginTop: 8,
-    marginBottom: 0,
-    backgroundColor: colors.mist,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: colors.line,
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  // Baris item destinasi di FlatList (ganti searchResultItem untuk FlatList)
-  resultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 10,
-    backgroundColor: '#FFFFFF',
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.line,
-    marginHorizontal: 16,
-  },
-  resultRowSelected: {
-    backgroundColor: 'rgba(27, 107, 102, 0.06)',
-  },
-  // Hitbox scroll — tinggi tetap ~4 baris, scroll mandiri di dalam
-  destListScrollBox: {
-    maxHeight: 300,
+  destHitbox: {
+    height: 300,
   },
   searchResultTitle: {
     fontFamily: fonts.bold,
@@ -832,15 +878,7 @@ const styles = StyleSheet.create({
     color: colors.sea,
     backgroundColor: colors.mist,
     paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 2,
-  },
-  searchResultSubtitle: {
-    fontFamily: fonts.regular,
-    fontSize: 10,
-    color: colors.muted,
-    paddingHorizontal: 12,
-    paddingBottom: 6,
+    paddingVertical: 8,
   },
   searchResultItem: {
     flexDirection: 'row',
@@ -880,23 +918,8 @@ const styles = StyleSheet.create({
   toggleAddTextSelected: {
     color: '#FFFFFF',
   },
-  highlightsWrap: {
-    marginTop: 14,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.line,
-    overflow: 'hidden',
-  },
-  highlightsTitle: {
-    fontFamily: fonts.bold,
-    fontSize: 12,
-    color: colors.sea,
-    backgroundColor: colors.mist,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 0,
-  },
+  highlightsWrap: { marginTop: 14 },
+  highlightsTitle: { fontFamily: fonts.medium, fontSize: 12, color: colors.muted, marginBottom: 8 },
   highlightsScroll: { gap: 10 },
   highlightCard: {
     width: 130,
