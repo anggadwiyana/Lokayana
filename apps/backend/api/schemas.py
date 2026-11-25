@@ -76,6 +76,10 @@ class RouteRequest(BaseModel):
     origin_lat: float = Field(..., description="Lintang titik awal.")
     origin_lng: float = Field(..., description="Bujur titik awal.")
     origin_name: str = Field(..., description="Nama lokasi titik awal (mis. 'Hotel Kuta').")
+    user_id: str = Field(
+        "guest",
+        description="ID pengguna untuk personalisasi CF. Default 'guest' agar klien lama tetap kompatibel.",
+    )
     destinations: list[DestinationIn] = Field(
         ...,
         min_length=1,
@@ -90,6 +94,47 @@ class RouteRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Response Nested Schemas
 # ---------------------------------------------------------------------------
+
+
+class ReviewCreate(BaseModel):
+    """Payload pengiriman ulasan dari aplikasi mobile."""
+
+    user_id: str = Field(..., min_length=1, description="ID pengguna pengulas.")
+    destination_id: str = Field(..., min_length=1, description="ID destinasi yang diulas.")
+    destination: DestinationIn | None = Field(
+        None,
+        description="Objek destinasi opsional; dipakai untuk upsert bila belum ada di SQLite.",
+    )
+    beauty: int = Field(..., ge=1, le=5, description="Rating keindahan 1–5.")
+    access: int = Field(..., ge=1, le=5, description="Rating akses jalan 1–5.")
+    facilities: int = Field(..., ge=1, le=5, description="Rating fasilitas 1–5.")
+    comment: str | None = Field(None, max_length=2000, description="Komentar opsional.")
+
+
+class ReviewOut(BaseModel):
+    """Representasi ulasan yang tersimpan di SQLite."""
+
+    id: int
+    user_id: str
+    destination_id: str
+    destination_name: str | None = None
+    beauty: int
+    access: int
+    facilities: int
+    overall_rating: float
+    comment: str | None = None
+    is_synthetic: bool = False
+    created_at: str
+    updated_at: str
+    reward_points: int = 0
+    first_review_bonus_points: int = 0
+
+
+class ReviewListResponse(BaseModel):
+    """Daftar ulasan beserta jumlahnya."""
+
+    reviews: list[ReviewOut]
+    count: int
 
 
 class OriginInfo(BaseModel):
@@ -133,6 +178,7 @@ class AlternativeDestination(BaseModel):
     Schema destinasi alternatif yang direkomendasikan.
 
     Extends DestinationIn dengan field-field hasil scoring AI.
+    Field CF dan crowd bersifat opsional agar klien lama tetap kompatibel.
     """
 
     id: str
@@ -157,6 +203,14 @@ class AlternativeDestination(BaseModel):
     rewardPoints: int = Field(..., description="Reward poin gamifikasi Lokayana.")
     firstReviewBonusPoints: int = Field(..., description="Bonus poin untuk ulasan pertama.")
     best_timing: BestTiming | None = Field(None, description="Informasi waktu terbaik kunjungan (Best Timing).")
+    # Field baru: collaborative filtering dan prediksi keramaian (opsional)
+    cfScore: float | None = Field(None, description="Skor item-based CF 0–100 (opsional).")
+    cfUsed: bool = Field(False, description="True jika skor CF dipakai untuk pengguna ini.")
+    cfReason: str | None = Field(None, description="Alasan CF atau cold start.")
+    crowdLevel: float | None = Field(None, description="Prediksi keramaian 0–100 (opsional).")
+    crowdLabel: str | None = Field(None, description="Label keramaian: Sepi/Sedang/Ramai.")
+    crowdSource: str | None = Field(None, description="'xgboost' atau 'rule_fallback'.")
+    rankingScore: float | None = Field(None, description="Skor akhir untuk pengurutan alternatif.")
 
 
 class RouteInfo(BaseModel):
@@ -200,4 +254,8 @@ class RouteResponse(BaseModel):
     alternatives: list[AlternativeDestination] = Field(
         ...,
         description="Daftar destinasi alternatif yang direkomendasikan (maks 30).",
+    )
+    personalization: dict[str, Any] | None = Field(
+        None,
+        description="Metadata personalisasi CF dan status model keramaian (field baru).",
     )

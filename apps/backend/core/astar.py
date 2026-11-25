@@ -29,13 +29,17 @@ from __future__ import annotations
 import heapq
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from core.best_timing import get_best_timing
 from core.haversine import haversine_km
 
 # Bobot penalti jika urutan destinasi melanggar kronologi waktu terbaik (km/jam)
 TIME_INVERSION_WEIGHT: float = 16.0
+
+# Bobot penalti keramaian (km ekuivalen) pada g-cost A*.
+# Nilai 0 berarti model tidak tersedia sehingga perilaku lama dipertahankan.
+CROWD_PENALTY_WEIGHT_KM: float = 6.0
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +93,28 @@ def _heuristic(current_pos: dict[str, Any], unvisited: list[dict[str, Any]]) -> 
 # ---------------------------------------------------------------------------
 
 
+def _crowd_penalty(
+    destination: dict[str, Any],
+    crowd_predictor: Callable[[dict[str, Any], float], float | None] | None,
+) -> float:
+    """Mengubah prediksi keramaian 0–100 menjadi penalti km ekuivalen.
+
+    Jika model tidak tersedia atau mengembalikan ``None``, penalti 0.0
+    sehingga aturan lama (jarak + kronologi ``best_timing``) tetap berlaku.
+    """
+    if crowd_predictor is None:
+        return 0.0
+    timing = destination.get("best_timing") or get_best_timing(destination)
+    hour = float(timing.get("time_order", 9.0))
+    try:
+        level = crowd_predictor(destination, hour)
+    except Exception:
+        return 0.0
+    if level is None:
+        return 0.0
+    return max(0.0, min(100.0, float(level))) / 100.0 * CROWD_PENALTY_WEIGHT_KM
+
+
 def _calculate_timing_penalty(prev_dest: dict[str, Any] | None, next_dest: dict[str, Any]) -> float:
     """
     Menghitung penalti jika urutan kunjungan melanggar kronologi waktu terbaik.
@@ -134,6 +160,7 @@ def astar_tsp_order(
     origin: dict[str, Any],
     destinations: list[dict[str, Any]],
     consider_timing: bool = True,
+    crowd_predictor: Callable[[dict[str, Any], float], float | None] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Mengurutkan destinasi wisata menggunakan algoritma A* Heuristic TSP
@@ -151,6 +178,9 @@ def astar_tsp_order(
         origin: Titik awal dengan key 'lat' dan 'lng'.
         destinations: Daftar destinasi wisata yang dipilih user.
         consider_timing: True untuk mengaktifkan kronologi waktu terbaik (default True).
+        crowd_predictor: Fungsi opsional ``(destination, hour) -> 0..100 | None``.
+            Bila tersedia, prediksi keramaian menambah penalti pada g-cost.
+            Bila ``None``, perilaku lama tidak berubah.
 
     Returns:
         list[dict[str, Any]]: Destinasi dalam urutan kunjungan optimal versi A*.
@@ -178,7 +208,7 @@ def astar_tsp_order(
     for i, dest in enumerate(annotated_destinations):
         dist = haversine_km(origin, dest)
         penalty = _calculate_timing_penalty(None, dest) if consider_timing else 0.0
-        g = dist + penalty
+        g = dist + penalty + _crowd_penalty(dest, crowd_predictor)
 
         remaining = [annotated_destinations[j] for j in range(n) if j != i]
         h = _heuristic(dest, remaining)
@@ -217,7 +247,12 @@ def astar_tsp_order(
             dist = haversine_km(current_dest, next_dest)
             penalty = _calculate_timing_penalty(current_dest, next_dest) if consider_timing else 0.0
 
-            new_g = node.g_cost + dist + penalty
+            new_g = (
+                node.g_cost
+                + dist
+                + penalty
+                + _crowd_penalty(next_dest, crowd_predictor)
+            )
             new_visited = node.visited | frozenset([next_idx])
 
             remaining = [annotated_destinations[j] for j in range(n) if j not in new_visited]

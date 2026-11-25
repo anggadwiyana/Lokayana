@@ -65,7 +65,14 @@ async def root() -> dict:
         ),
         "docs": "/docs",
         "health": "/api/health",
+        "health_alias": "/health",
     }
+
+
+@app.get("/health", tags=["Info"])
+async def health_alias() -> dict[str, str]:
+    """Health check ringan tanpa database, model, atau autentikasi."""
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

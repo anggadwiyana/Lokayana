@@ -15,7 +15,7 @@ Semua fungsi bersifat pure (tidak ada side effect I/O) kecuali
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from core.astar import astar_tsp_order
 from core.best_timing import get_best_timing
@@ -26,6 +26,14 @@ from core.haversine import haversine_km
 # ---------------------------------------------------------------------------
 
 RADIUS_KM: float = 15.0  # Radius pencarian alternatif dalam km
+
+# Bobot CF pada skor akhir. Konten tetap dominan (70%), CF berkontribusi 30%.
+CF_WEIGHT: float = 0.30
+
+# Pengurangan skor peringkat karena keramaian; maksimum 4 poin agar tidak
+# menggantikan skor kemiripan.
+CROWD_RANKING_MAX_PENALTY: float = 4.0
+CROWD_RANKING_START_LEVEL: float = 60.0
 
 # Daftar keyword semantik yang dikenali oleh sistem rekomendasi.
 # Digunakan untuk mengidentifikasi kesamaan tema/daya-tarik antar destinasi.
@@ -95,6 +103,21 @@ def _calculate_points(review_count: int) -> tuple[int, int]:
     return 20, 10
 
 
+def calculate_reward_points(review_count: int) -> tuple[int, int]:
+    """API publik untuk aturan poin yang sama dengan ``_calculate_points``."""
+    return _calculate_points(review_count)
+
+
+def _crowd_label(level: float | None) -> str | None:
+    if level is None:
+        return None
+    if level < 35.0:
+        return "Sepi"
+    if level <= 65.0:
+        return "Sedang"
+    return "Ramai"
+
+
 # ---------------------------------------------------------------------------
 # Fungsi Utama: Skor Kemiripan
 # ---------------------------------------------------------------------------
@@ -104,6 +127,7 @@ def calculate_similarity_score(
     target: dict,
     candidate: dict,
     distance_from_hub_km: float,
+    cf_score: float | None = None,
 ) -> tuple[int, str]:
     """
     Menghitung skor kemiripan AI (62–99%) antara destinasi target dan kandidat.
@@ -124,6 +148,8 @@ def calculate_similarity_score(
         candidate (dict): Destinasi kandidat alternatif.
                           Harus memiliki key yang sama seperti target.
         distance_from_hub_km (float): Jarak kandidat dari hub terdekat dalam km.
+        cf_score (float | None): Skor item-based CF 0–100. Jika ``None``,
+            skor konten dipakai apa adanya (cold-start fallback).
 
     Returns:
         tuple[int, str]:
@@ -193,6 +219,16 @@ def calculate_similarity_score(
     # Normalisasi skor ke rentang [62, 99]
     # ------------------------------------------------------------------
     final_score = min(99, max(62, round(score)))
+
+    # CF adalah komponen tambahan, bukan pengganti skor konten. Bobot 30%
+    # hanya aktif bila skor CF tersedia; cold start mempertahankan perilaku lama.
+    if cf_score is not None:
+        blended = (
+            (1.0 - CF_WEIGHT) * final_score
+            + CF_WEIGHT * max(0.0, min(100.0, float(cf_score)))
+        )
+        final_score = min(99, max(62, round(blended)))
+
     main_reason = reasons[0] if reasons else "Alternatif populer di radius 15 km"
 
     return final_score, main_reason
@@ -207,6 +243,11 @@ def get_recommendations(
     origin: dict[str, Any],
     destinations: list[dict[str, Any]],
     all_destinations: list[dict[str, Any]],
+    user_id: str = "guest",
+    cf_scores: dict[str, float] | None = None,
+    cf_used: bool = False,
+    cf_reason: str = "",
+    crowd_predictor: Callable[[dict[str, Any], float], float | None] | None = None,
 ) -> dict[str, Any]:
     """
     Engine rekomendasi utama Lokayana AI.
@@ -226,6 +267,13 @@ def get_recommendations(
                                               'lat', 'lng', 'id', 'name', dll.
         all_destinations (list[dict[str, Any]]): Seluruh database destinasi
                                                   (untuk mencari kandidat alternatif).
+        user_id (str): ID pengguna untuk metadata personalisasi.
+        cf_scores (dict[str, float] | None): Skor item-based CF per destinasi.
+        cf_used (bool): True jika CF dipakai; False berarti cold start.
+        cf_reason (str): Alasan CF/cold start untuk laporan.
+        crowd_predictor (Callable | None): Fungsi prediksi keramaian
+            ``(destination, hour) -> float | None``. Jika ``None`` atau
+            mengembalikan ``None``, aturan lama tetap dipakai.
 
     Returns:
         dict[str, Any]: Dictionary sesuai schema RecommendationResponse:
@@ -245,10 +293,17 @@ def get_recommendations(
     if not destinations:
         raise ValueError("Daftar destinasi tidak boleh kosong")
 
+    cf_scores = cf_scores or {}
+
     # ------------------------------------------------------------------
     # 1. Urutkan destinasi menggunakan Time-Aware A* TSP
     # ------------------------------------------------------------------
-    ordered_destinations = astar_tsp_order(origin, destinations, consider_timing=True)
+    ordered_destinations = astar_tsp_order(
+        origin,
+        destinations,
+        consider_timing=True,
+        crowd_predictor=crowd_predictor,
+    )
 
     # Destinasi utama: stop terakhir dalam rute A*
     primary_destination = ordered_destinations[-1] if ordered_destinations else destinations[0]
@@ -401,14 +456,55 @@ def get_recommendations(
         if not eligible:
             continue
 
-        # Hitung similarity score
-        score, reason = calculate_similarity_score(nearest_stop, candidate, distance_from_hub_km)
+        # Hitung similarity score (konten + CF bila tersedia)
+        cf_score = cf_scores.get(str(candidate.get("id", ""))) if cf_used else None
+        score, reason = calculate_similarity_score(
+            nearest_stop,
+            candidate,
+            distance_from_hub_km,
+            cf_score=cf_score,
+        )
         reward, bonus = _calculate_points(int(candidate.get("reviewCount", 0)))
 
         # Estimasi waktu perjalanan ke kandidat: asumsi kecepatan rata-rata 35 km/h
         estimated_travel_minutes = max(5, round((distance_from_hub_km / 35) * 60))
 
         rating_val = float(candidate.get("rating", 0.0))
+        timing = get_best_timing(candidate)
+
+        # Prediksi keramaian pada jam representatif best_timing. Jika model
+        # tidak tersedia, nilai tetap None dan aturan lama dipakai.
+        crowd_level: float | None = None
+        crowd_source = "rule_fallback"
+        if crowd_predictor is not None:
+            try:
+                predicted = crowd_predictor(
+                    candidate,
+                    float(timing.get("time_order", 9.0)),
+                )
+            except Exception:
+                predicted = None
+            if predicted is not None:
+                crowd_level = round(float(predicted), 1)
+                crowd_source = "xgboost"
+
+        ranking_score = float(score)
+        if crowd_level is not None:
+            excess = max(0.0, crowd_level - CROWD_RANKING_START_LEVEL)
+            ranking_score = max(
+                0.0,
+                ranking_score - min(CROWD_RANKING_MAX_PENALTY, excess * 0.1),
+            )
+
+        candidate_cf_used = bool(cf_used and cf_score is not None)
+        if candidate_cf_used:
+            candidate_cf_reason = cf_reason or "Item-based CF (cosine)"
+        elif cf_used:
+            candidate_cf_reason = "CF tidak memberi skor untuk destinasi ini"
+        else:
+            candidate_cf_reason = (
+                "Cold start: rating agregat; reviewCount untuk Hidden Gem/poin"
+            )
 
         candidates.append({
             **candidate,
@@ -424,14 +520,25 @@ def get_recommendations(
             },
             "rewardPoints": reward,
             "firstReviewBonusPoints": bonus,
-            "best_timing": get_best_timing(candidate),
+            "best_timing": timing,
+            "cfScore": round(float(cf_score), 1) if cf_score is not None else None,
+            "cfUsed": candidate_cf_used,
+            "cfReason": candidate_cf_reason,
+            "crowdLevel": crowd_level,
+            "crowdLabel": _crowd_label(crowd_level),
+            "crowdSource": crowd_source,
+            "rankingScore": round(ranking_score, 1),
         })
 
     # ------------------------------------------------------------------
-    # 6. Urutkan kandidat: similarity score tertinggi, lalu rating tertinggi
+    # 6. Urutkan kandidat: ranking score, similarity, lalu rating
     # ------------------------------------------------------------------
     candidates.sort(
-        key=lambda c: (-c["similarityScore"], -float(c.get("rating", 0.0)))
+        key=lambda c: (
+            -float(c.get("rankingScore", c["similarityScore"])),
+            -c["similarityScore"],
+            -float(c.get("rating", 0.0)),
+        )
     )
 
     top_alternatives = candidates[:30]
@@ -465,4 +572,17 @@ def get_recommendations(
         # 'route' akan diisi oleh route handler setelah fetch OSRM
         "route": None,
         "alternatives": top_alternatives,
+        "personalization": {
+            "userId": user_id,
+            "cfUsed": bool(cf_used),
+            "cfReason": cf_reason or (
+                "Cold start: rating agregat; reviewCount untuk Hidden Gem/poin"
+            ),
+            "crowdModelUsed": any(
+                candidate.get("crowdSource") == "xgboost" for candidate in candidates
+            ),
+            "crowdModelNote": (
+                "Prediksi XGBoost dilatih pada data sintetis; bukan keramaian nyata."
+            ),
+        },
     }

@@ -24,13 +24,18 @@ from api.schemas import (
     DestinationInfo,
     OriginInfo,
     RatingDetail,
+    ReviewCreate,
+    ReviewListResponse,
+    ReviewOut,
     RouteInfo,
     RouteRequest,
     RouteResponse,
     SearchArea,
 )
+from core.cf import get_cf_scores, get_reviews, save_review
+from core.crowd import get_crowd_model
 from core.haversine import haversine_km
-from core.recommender import get_recommendations
+from core.recommender import calculate_reward_points, get_recommendations
 
 # ---------------------------------------------------------------------------
 # Router Instance
@@ -297,12 +302,23 @@ async def post_route(request: RouteRequest) -> RouteResponse:
     if not destinations_dicts:
         raise HTTPException(status_code=400, detail="Daftar destinations tidak boleh kosong.")
 
+    # Hitung CF dan muat model keramaian sekali per request. Keduanya memiliki
+    # fallback aman: CF cold start dan model None tidak menghentikan endpoint.
+    cf_result = get_cf_scores(request.user_id)
+    crowd_model = get_crowd_model()
+    crowd_predictor = crowd_model.predict if crowd_model.available else None
+
     try:
         # Panggil core engine rekomendasi
         result = get_recommendations(
             origin=origin,
             destinations=destinations_dicts,
             all_destinations=all_destinations_dicts,
+            user_id=request.user_id,
+            cf_scores=cf_result.scores,
+            cf_used=cf_result.used,
+            cf_reason=cf_result.reason,
+            crowd_predictor=crowd_predictor,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -390,6 +406,13 @@ async def post_route(request: RouteRequest) -> RouteResponse:
                 rewardPoints=int(alt.get("rewardPoints", 20)),
                 firstReviewBonusPoints=int(alt.get("firstReviewBonusPoints", 10)),
                 best_timing=alt.get("best_timing"),
+                cfScore=alt.get("cfScore"),
+                cfUsed=bool(alt.get("cfUsed", False)),
+                cfReason=alt.get("cfReason"),
+                crowdLevel=alt.get("crowdLevel"),
+                crowdLabel=alt.get("crowdLabel"),
+                crowdSource=alt.get("crowdSource"),
+                rankingScore=alt.get("rankingScore"),
             )
         )
 
@@ -418,7 +441,87 @@ async def post_route(request: RouteRequest) -> RouteResponse:
         searchAreas=search_areas,
         route=route_info,
         alternatives=alternatives,
+        personalization=result.get("personalization"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: POST /api/reviews dan GET /api/reviews
+# ---------------------------------------------------------------------------
+
+
+def _to_review_out(row: dict[str, Any]) -> ReviewOut:
+    """Mengubah baris SQLite menjadi ReviewOut beserta poin gamifikasi."""
+    reward, bonus = calculate_reward_points(int(row.get("destination_review_count", 0)))
+    return ReviewOut(
+        id=int(row["id"]),
+        user_id=str(row["user_id"]),
+        destination_id=str(row["destination_id"]),
+        destination_name=row.get("destination_name"),
+        beauty=int(row["beauty"]),
+        access=int(row["access"]),
+        facilities=int(row["facilities"]),
+        overall_rating=float(row["overall_rating"]),
+        comment=row.get("comment"),
+        is_synthetic=bool(row.get("is_synthetic", False)),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+        reward_points=reward,
+        first_review_bonus_points=bonus,
+    )
+
+
+@router.post("/reviews", response_model=ReviewOut, status_code=201, summary="Simpan Ulasan")
+def post_review(payload: ReviewCreate) -> ReviewOut:
+    """Menyimpan ulasan pengguna ke SQLite.
+
+    Endpoint ini menerima tiga rating aspek (keindahan, akses, fasilitas) dan
+    komentar opsional. Jika objek ``destination`` dikirim, destinasi akan
+    di-upsert agar ulasan tetap dapat disimpan meskipun dataset belum di-seed.
+    """
+    try:
+        row = save_review(
+            user_id=payload.user_id,
+            destination_id=payload.destination_id,
+            beauty=payload.beauty,
+            access=payload.access,
+            facilities=payload.facilities,
+            comment=payload.comment,
+            destination=payload.destination.model_dump() if payload.destination else None,
+            is_synthetic=False,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal menyimpan ulasan: {exc}",
+        ) from exc
+    return _to_review_out(row)
+
+
+@router.get("/reviews", response_model=ReviewListResponse, summary="Baca Ulasan")
+def list_reviews(
+    destination_id: str | None = None,
+    user_id: str | None = None,
+    limit: int = 50,
+) -> ReviewListResponse:
+    """Membaca ulasan, dapat difilter berdasarkan destinasi atau pengguna."""
+    try:
+        rows = get_reviews(
+            destination_id=destination_id,
+            user_id=user_id,
+            limit=limit,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal membaca ulasan: {exc}",
+        ) from exc
+    reviews = [_to_review_out(row) for row in rows]
+    return ReviewListResponse(reviews=reviews, count=len(reviews))
 
 
 # ---------------------------------------------------------------------------
@@ -432,10 +535,15 @@ async def health_check() -> dict[str, str]:
     Health check endpoint untuk monitoring service Lokayana AI Backend.
 
     Returns:
-        dict[str, str]: Status service, nama service, dan algoritma yang digunakan.
+        dict[str, str]: Status service, nama service, algoritma, dan status
+        penyimpanan/model.
     """
+    crowd_model = get_crowd_model()
     return {
         "status": "ok",
         "service": "Lokayana AI Backend",
-        "algorithm": "Time-Aware A* TSP (Best Timing + Distance)",
+        "algorithm": "Time-Aware A* TSP (Best Timing + Distance + Crowd Penalty)",
+        "database": "sqlite",
+        "cf": "item-based cosine",
+        "crowd_model": "xgboost" if crowd_model.available else "rule_fallback",
     }

@@ -13,9 +13,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Tentukan direktori kerja dalam container
 WORKDIR /app
 
-# Install curl untuk healthcheck container
+# Install curl untuk healthcheck dan libgomp1 untuk runtime XGBoost
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Buat non-root user demi keamanan (Best Practice Security)

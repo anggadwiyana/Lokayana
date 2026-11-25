@@ -147,6 +147,18 @@ Health check untuk monitoring.
 
 ---
 
+### `GET /health`
+Alias health check ringan untuk klien eksternal. Tidak menyentuh SQLite, tidak memuat model XGBoost, dan tidak memerlukan autentikasi.
+
+**Response `200`:**
+```json
+{
+  "status": "ok"
+}
+```
+
+---
+
 ### `POST /api/route`
 **Endpoint utama** — Rekomendasi rute + destinasi alternatif.
 
